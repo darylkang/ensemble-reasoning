@@ -24,16 +24,10 @@ pip install "git+ssh://git@github.com/<org>/ensemble-reasoning.git"
 ```
 
 ## Run
-The CLI is stubbed in this round:
+`arbiter run` launches an interactive wizard that creates a run folder under `./runs` with `manifest.json` and `config.resolved.json`.
 
 ```bash
-arbiter
-```
-
-You should see:
-
-```
-arbiter: scaffold installed; implementation pending
+arbiter run
 ```
 
 ## Docs

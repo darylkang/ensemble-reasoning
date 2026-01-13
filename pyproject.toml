@@ -9,7 +9,10 @@ description = "Research harness for ensemble reasoning experiments."
 readme = "README.md"
 requires-python = ">=3.14"
 license = { file = "LICENSE" }
-dependencies = []
+dependencies = [
+  "rich==14.2.0",
+  "typer==0.21.1",
+]
 
 [project.scripts]
 arbiter = "arbiter.cli:main"
