@@ -3,6 +3,10 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Arbiter artifacts
+runs/
+.DS_Store
+
 # C extensions
 *.so
 

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ensemble-reasoning"
+version = "0.1.0.dev0"
+description = "Research harness for ensemble reasoning experiments."
+readme = "README.md"
+requires-python = ">=3.14"
+license = { file = "LICENSE" }
+dependencies = []
+
+[project.scripts]
+arbiter = "arbiter.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/arbiter"]
