@@ -24,6 +24,7 @@ from arbiter.storage import compute_hash, create_run_dir, write_json
 from arbiter.ui.progress import status_spinner
 from arbiter.ui.render import (
     render_banner,
+    render_gap,
     render_info,
     render_step_header,
     render_success,
@@ -54,6 +55,7 @@ def run_wizard() -> None:
     run_name_input = typer.prompt("Run name (optional)", default="", show_default=False)
     run_name = run_name_input.strip() or "auto"
     run_slug = slugify_run_name(run_name)
+    render_gap(after_prompt=True)
 
     render_step_header(2, step_total, "Sampling design", "Choose rung, models, trials, and temperature policy.")
     heterogeneity_rung = _prompt_choice("Heterogeneity rung", ["H0", "H1", "H2"], "H1")
@@ -67,6 +69,7 @@ def run_wizard() -> None:
     else:
         temperatures = _prompt_float_list("Temperatures (comma-separated)", "0.7,1.0")
         temperature_policy = TemperaturePolicy(kind="list", temperatures=temperatures)
+    render_gap(after_prompt=True)
 
     render_step_header(3, step_total, "Personas", "Optionally provide a persona bank and selection mode.")
     persona_bank_input = typer.prompt("Persona bank path (optional)", default="", show_default=False)
@@ -95,12 +98,14 @@ def run_wizard() -> None:
         persona_ids=persona_ids,
         loaded=persona_loaded,
     )
+    render_gap(after_prompt=True)
 
     persona_ids_for_q = persona_ids if selection_mode == "sample_uniform" else None
     render_step_header(4, step_total, "Materialize Q(c)", "Generate the explicit configuration distribution.")
     with status_spinner("Materializing Q(c)"):
         q_distribution = build_q_distribution(models, temperatures, persona_ids_for_q)
     render_success(f"Q(c) materialized with {len(q_distribution.atoms)} atoms.")
+    render_gap(after_prompt=False)
 
     planned_total_trials = len(q_distribution.atoms) * trials_per_question
     render_step_header(5, step_total, "Budget and output", "Set a per-question call guardrail and output path.")
@@ -113,6 +118,7 @@ def run_wizard() -> None:
 
     output_base_dir_input = typer.prompt("Output base directory", default="./runs")
     output_base_dir = str(Path(output_base_dir_input.strip() or "./runs").expanduser())
+    render_gap(after_prompt=True)
 
     render_step_header(6, step_total, "Write run artifacts", "Write manifest and resolved config to disk.")
     timestamp = started_at.strftime("%Y%m%d_%H%M%S")
