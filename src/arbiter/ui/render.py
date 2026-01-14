@@ -5,10 +5,8 @@ from __future__ import annotations
 from typing import Mapping, Sequence
 
 from rich import box
-from rich.align import Align
 from rich.console import Group
 from rich.panel import Panel
-from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
@@ -17,24 +15,30 @@ from arbiter.ui.console import get_console
 
 def render_banner(title: str, subtitle: str) -> None:
     console = get_console()
-    title_text = Text(title, style="title")
-    subtitle_text = Text(subtitle, style="subtitle")
     panel = Panel(
-        Group(Align.center(title_text), Align.center(subtitle_text)),
-        box=box.MINIMAL,
-        border_style="accent",
-        padding=(0, 2),
+        Group(Text(title, style="title"), Text(subtitle, style="subtitle")),
+        box=box.ROUNDED,
+        border_style="grey37",
+        padding=(1, 2),
     )
     console.print(panel)
+
 
 def render_step_header(step_idx: int, step_total: int, title: str, description: str) -> None:
     console = get_console()
     if step_idx > 1:
         console.print()
-    text = Text(f"Step {step_idx}/{step_total}  {title}", style="step")
-    console.print(text)
+    header = Text(f"Step {step_idx}/{step_total} \u2022 {title}", style="step")
+    content = [header]
     if description:
-        console.print(Text(description, style="subtitle"))
+        content.append(Text(description, style="subtitle"))
+    panel = Panel(
+        Group(*content),
+        box=box.SIMPLE,
+        border_style="grey37",
+        padding=(0, 2),
+    )
+    console.print(panel)
 
 
 def render_info(text: str) -> None:
@@ -54,17 +58,20 @@ def render_success(text: str) -> None:
 
 def render_error(text: str) -> None:
     console = get_console()
-    panel = Panel(Text(text, style="error"), box=box.MINIMAL, border_style="error")
+    panel = Panel(
+        Text(text, style="error"),
+        box=box.SIMPLE,
+        border_style="error",
+        padding=(0, 2),
+    )
     console.print(panel)
 
 
 def render_summary_table(rows: Mapping[str, str] | Sequence[tuple[str, str]], title: str = "Summary") -> None:
     console = get_console()
-    console.print()
-    console.print(Rule(Text(title, style="step"), style="accent"))
     table = Table(
         show_header=False,
-        box=box.MINIMAL,
+        box=None,
         pad_edge=False,
     )
     table.add_column(style="label", no_wrap=True, justify="right")
@@ -74,4 +81,13 @@ def render_summary_table(rows: Mapping[str, str] | Sequence[tuple[str, str]], ti
     for key, value in items:
         table.add_row(str(key), str(value))
 
-    console.print(table)
+    panel = Panel(
+        table,
+        title=Text(title, style="step"),
+        title_align="left",
+        border_style="grey37",
+        box=box.ROUNDED,
+        padding=(1, 2),
+    )
+    console.print()
+    console.print(panel)

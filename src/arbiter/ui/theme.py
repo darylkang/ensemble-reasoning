@@ -6,14 +6,14 @@ from rich.theme import Theme
 
 THEME = Theme(
     {
-        "accent": "cyan",
-        "title": "bold white",
+        "accent": "bright_blue",
+        "title": "bold bright_blue",
         "subtitle": "dim",
-        "step": "bold white",
+        "step": "bold bright_blue",
         "info": "dim",
-        "warning": "yellow",
-        "success": "green",
-        "error": "bold red",
+        "warning": "red3",
+        "success": "green3",
+        "error": "bold red3",
         "label": "dim",
         "value": "white",
         "path": "cyan",
