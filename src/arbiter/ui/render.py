@@ -21,16 +21,20 @@ def render_banner(title: str, subtitle: str) -> None:
     subtitle_text = Text(subtitle, style="subtitle")
     panel = Panel(
         Group(Align.center(title_text), Align.center(subtitle_text)),
+        box=box.MINIMAL,
         border_style="accent",
-        padding=(1, 2),
+        padding=(0, 2),
     )
     console.print(panel)
 
-
-def render_step_header(step_idx: int, step_total: int, title: str) -> None:
+def render_step_header(step_idx: int, step_total: int, title: str, description: str) -> None:
     console = get_console()
+    if step_idx > 1:
+        console.print()
     text = Text(f"Step {step_idx}/{step_total}  {title}", style="step")
-    console.print(Rule(text, style="accent"))
+    console.print(text)
+    if description:
+        console.print(Text(description, style="subtitle"))
 
 
 def render_info(text: str) -> None:
@@ -50,17 +54,20 @@ def render_success(text: str) -> None:
 
 def render_error(text: str) -> None:
     console = get_console()
-    console.print(text, style="error", markup=False)
+    panel = Panel(Text(text, style="error"), box=box.MINIMAL, border_style="error")
+    console.print(panel)
 
 
-def render_summary_table(rows: Mapping[str, str] | Sequence[tuple[str, str]]) -> None:
+def render_summary_table(rows: Mapping[str, str] | Sequence[tuple[str, str]], title: str = "Summary") -> None:
     console = get_console()
+    console.print()
+    console.print(Rule(Text(title, style="step"), style="accent"))
     table = Table(
         show_header=False,
         box=box.MINIMAL,
         pad_edge=False,
     )
-    table.add_column(style="label", no_wrap=True)
+    table.add_column(style="label", no_wrap=True, justify="right")
     table.add_column(style="value")
 
     items = rows.items() if hasattr(rows, "items") else rows

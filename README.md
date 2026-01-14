@@ -27,6 +27,7 @@ pip install "git+ssh://git@github.com/<org>/ensemble-reasoning.git"
 `arbiter run` launches an interactive wizard that creates a run folder under `./runs` with `manifest.json` and `config.resolved.json`.
 
 ```bash
+arbiter --help
 arbiter run
 ```
 

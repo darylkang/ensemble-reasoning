@@ -21,7 +21,6 @@ from arbiter.config import (
 )
 from arbiter.manifest import Manifest, get_git_info, platform_info
 from arbiter.storage import compute_hash, create_run_dir, write_json
-from arbiter.ui.console import get_console
 from arbiter.ui.progress import status_spinner
 from arbiter.ui.render import (
     render_banner,
@@ -33,6 +32,19 @@ from arbiter.ui.render import (
 )
 
 app = typer.Typer(add_completion=False, help="Research harness for ensemble reasoning.")
+
+
+@app.callback(invoke_without_command=True)
+def root(ctx: typer.Context) -> None:
+    """Arbiter research harness CLI."""
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit(code=0)
+
+
+@app.command("run")
+def run_wizard() -> None:
+    """Interactive wizard to create a run folder and resolved config."""
 
 
 def _prompt_choice(prompt: str, choices: list[str], default: str) -> str:
@@ -93,21 +105,17 @@ def _prompt_float_list(prompt: str, default: str) -> list[float]:
         return values
 
 
-@app.command()
-def run() -> None:
-    """Interactive wizard to create a run folder and resolved config."""
-    get_console()
     render_banner("arbiter", "Ensemble reasoning run setup")
 
     started_at = datetime.now(timezone.utc)
 
     step_total = 6
-    render_step_header(1, step_total, "Run identity")
+    render_step_header(1, step_total, "Run identity", "Label the run for traceability.")
     run_name_input = typer.prompt("Run name (optional)", default="", show_default=False)
     run_name = run_name_input.strip() or "auto"
     run_slug = slugify_run_name(run_name)
 
-    render_step_header(2, step_total, "Sampling design")
+    render_step_header(2, step_total, "Sampling design", "Choose rung, models, trials, and temperature policy.")
     heterogeneity_rung = _prompt_choice("Heterogeneity rung", ["H0", "H1", "H2"], "H1")
     models = _prompt_csv("Model identifiers (comma-separated)", "model-1")
     trials_per_question = _prompt_int("Trials per question", 16, min_value=1)
@@ -120,7 +128,7 @@ def run() -> None:
         temperatures = _prompt_float_list("Temperatures (comma-separated)", "0.7,1.0")
         temperature_policy = TemperaturePolicy(kind="list", temperatures=temperatures)
 
-    render_step_header(3, step_total, "Personas")
+    render_step_header(3, step_total, "Personas", "Optionally provide a persona bank and selection mode.")
     persona_bank_input = typer.prompt("Persona bank path (optional)", default="", show_default=False)
     persona_bank_path = persona_bank_input.strip() or None
     selection_mode = "none"
@@ -149,13 +157,13 @@ def run() -> None:
     )
 
     persona_ids_for_q = persona_ids if selection_mode == "sample_uniform" else None
-    render_step_header(4, step_total, "Materialize Q(c)")
-    with status_spinner("Materializing configuration distribution"):
+    render_step_header(4, step_total, "Materialize Q(c)", "Generate the explicit configuration distribution.")
+    with status_spinner("Materializing Q(c)"):
         q_distribution = build_q_distribution(models, temperatures, persona_ids_for_q)
-    render_success(f"Materialized Q(c) with {len(q_distribution.atoms)} atoms.")
+    render_success(f"Q(c) materialized with {len(q_distribution.atoms)} atoms.")
 
     planned_total_trials = len(q_distribution.atoms) * trials_per_question
-    render_step_header(5, step_total, "Budget and output")
+    render_step_header(5, step_total, "Budget and output", "Set a per-question call guardrail and output path.")
     max_calls = _prompt_int(
         "Max model calls (per question)",
         planned_total_trials,
@@ -166,10 +174,10 @@ def run() -> None:
     output_base_dir_input = typer.prompt("Output base directory", default="./runs")
     output_base_dir = str(Path(output_base_dir_input.strip() or "./runs").expanduser())
 
-    render_step_header(6, step_total, "Write run artifacts")
+    render_step_header(6, step_total, "Write run artifacts", "Write manifest and resolved config to disk.")
     timestamp = started_at.strftime("%Y%m%d_%H%M%S")
     run_id = f"{timestamp}-{uuid.uuid4().hex[:8]}"
-    with status_spinner("Creating run folder and writing artifacts"):
+    with status_spinner("Writing run artifacts"):
         run_dir = create_run_dir(Path(output_base_dir), timestamp, run_slug)
 
         notes = ["Questions and trials are not executed in this round."]
@@ -221,7 +229,7 @@ def run() -> None:
         manifest_path = run_dir / "manifest.json"
         write_json(manifest_path, manifest.to_dict())
 
-    render_success("Wrote config.resolved.json and manifest.json.")
+    render_success("Run artifacts written.")
 
     weight_sum = sum(atom.weight for atom in q_distribution.atoms)
     summary = {
@@ -229,11 +237,11 @@ def run() -> None:
         "Rung": heterogeneity_rung,
         "Q(c) atoms": str(len(q_distribution.atoms)),
         "Weight sum": f"{weight_sum:.6f}",
-        "Planned trials (per question)": str(planned_total_trials),
-        "Max calls (per question)": str(max_calls),
+        "Planned trials/q": str(planned_total_trials),
+        "Max calls/q": str(max_calls),
     }
     render_summary_table(summary)
-    render_info("Next step: trial execution is not implemented in this round.")
+    render_info("Next step: execution is not implemented in this round.")
 
 
 def main() -> None:

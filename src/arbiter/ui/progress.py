@@ -21,8 +21,8 @@ from arbiter.ui.console import get_console
 def build_progress() -> Progress:
     return Progress(
         SpinnerColumn(style="accent"),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(bar_width=None, style="cyan"),
+        TextColumn("[progress.description]{task.description}", style="info"),
+        BarColumn(bar_width=None, style="cyan", complete_style="accent", finished_style="accent"),
         TaskProgressColumn(),
         TimeElapsedColumn(),
         TimeRemainingColumn(),
