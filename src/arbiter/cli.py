@@ -45,66 +45,6 @@ def root(ctx: typer.Context) -> None:
 @app.command("run")
 def run_wizard() -> None:
     """Interactive wizard to create a run folder and resolved config."""
-
-
-def _prompt_choice(prompt: str, choices: list[str], default: str) -> str:
-    normalized_choices = {choice.lower(): choice for choice in choices}
-    while True:
-        response = typer.prompt(f"{prompt} ({'/'.join(choices)})", default=default)
-        normalized = response.strip().lower()
-        if normalized in normalized_choices:
-            return normalized_choices[normalized]
-        render_warning(f"Invalid choice: {response}. Choose from {', '.join(choices)}.")
-
-
-def _prompt_csv(prompt: str, default: str) -> list[str]:
-    while True:
-        response = typer.prompt(prompt, default=default)
-        items = [item.strip() for item in response.split(",") if item.strip()]
-        items = dedupe_preserve_order(items)
-        if items:
-            return items
-        render_warning("Please provide at least one value.")
-
-
-def _prompt_int(prompt: str, default: int, min_value: int = 1) -> int:
-    while True:
-        response = typer.prompt(prompt, default=str(default))
-        try:
-            value = int(response)
-        except ValueError:
-            render_warning("Please enter an integer.")
-            continue
-        if value < min_value:
-            render_warning(f"Value must be >= {min_value}.")
-            continue
-        return value
-
-
-def _prompt_float(prompt: str, default: float) -> float:
-    while True:
-        response = typer.prompt(prompt, default=str(default))
-        try:
-            return float(response)
-        except ValueError:
-            render_warning("Please enter a number.")
-
-
-def _prompt_float_list(prompt: str, default: str) -> list[float]:
-    while True:
-        response = typer.prompt(prompt, default=default)
-        parts = [part.strip() for part in response.split(",") if part.strip()]
-        if not parts:
-            render_warning("Please enter one or more numbers.")
-            continue
-        try:
-            values = [float(part) for part in parts]
-        except ValueError:
-            render_warning("Invalid list; use comma-separated numbers.")
-            continue
-        return values
-
-
     render_banner("arbiter", "Ensemble reasoning run setup")
 
     started_at = datetime.now(timezone.utc)
@@ -242,6 +182,64 @@ def _prompt_float_list(prompt: str, default: str) -> list[float]:
     }
     render_summary_table(summary)
     render_info("Next step: execution is not implemented in this round.")
+
+
+def _prompt_choice(prompt: str, choices: list[str], default: str) -> str:
+    normalized_choices = {choice.lower(): choice for choice in choices}
+    while True:
+        response = typer.prompt(f"{prompt} ({'/'.join(choices)})", default=default)
+        normalized = response.strip().lower()
+        if normalized in normalized_choices:
+            return normalized_choices[normalized]
+        render_warning(f"Invalid choice: {response}. Choose from {', '.join(choices)}.")
+
+
+def _prompt_csv(prompt: str, default: str) -> list[str]:
+    while True:
+        response = typer.prompt(prompt, default=default)
+        items = [item.strip() for item in response.split(",") if item.strip()]
+        items = dedupe_preserve_order(items)
+        if items:
+            return items
+        render_warning("Please provide at least one value.")
+
+
+def _prompt_int(prompt: str, default: int, min_value: int = 1) -> int:
+    while True:
+        response = typer.prompt(prompt, default=str(default))
+        try:
+            value = int(response)
+        except ValueError:
+            render_warning("Please enter an integer.")
+            continue
+        if value < min_value:
+            render_warning(f"Value must be >= {min_value}.")
+            continue
+        return value
+
+
+def _prompt_float(prompt: str, default: float) -> float:
+    while True:
+        response = typer.prompt(prompt, default=str(default))
+        try:
+            return float(response)
+        except ValueError:
+            render_warning("Please enter a number.")
+
+
+def _prompt_float_list(prompt: str, default: str) -> list[float]:
+    while True:
+        response = typer.prompt(prompt, default=default)
+        parts = [part.strip() for part in response.split(",") if part.strip()]
+        if not parts:
+            render_warning("Please enter one or more numbers.")
+            continue
+        try:
+            values = [float(part) for part in parts]
+        except ValueError:
+            render_warning("Invalid list; use comma-separated numbers.")
+            continue
+        return values
 
 
 def main() -> None:
