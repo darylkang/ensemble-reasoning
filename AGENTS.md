@@ -16,5 +16,10 @@ This file is authoritative for Codex behavior in this repo.
 - Commit at the end of each coding round, including scaffold-only rounds.
 - Keep commits small and coherent; avoid unrelated changes in a single commit.
 
+## Repo Hygiene
+- Never commit run artifacts under `runs/`. If they are accidentally tracked, remove them from git and ensure they are ignored.
+- If code changes any contract (CLI behavior, artifact schema, config fields), update `docs/spec.md` and `README.md` in the same round.
+- Security hygiene: API keys only via environment variables; never log or serialize secrets.
+
 ## Round-Specific Instructions
 - Round-specific instructions must be provided in the prompt, issue, or PR description and must not be added to AGENTS.md.

@@ -2,10 +2,16 @@
 
 ensemble-reasoning is a research harness for running ensemble reasoning experiments with language models. It treats reasoning outputs as a distribution over decisions and rationales, and emphasizes reproducibility, auditability, and statistical rigor over product features.
 
+The key framing is explicit configuration sampling `Q(c)` and the induced decision distribution `P_Q(y|x)`, estimated by `P̂_Q(y|x)`. We prioritize reliability signals, decision stability, and meta-uncertainty (confidence intervals, convergence) rather than accuracy alone.
+
 ## Non-goals
 - Not a production system or hosted service.
 - Not a commercial product.
 - Not a simulation of human populations or juries.
+
+## Current status
+- `arbiter run` sets up runs and writes run folder artifacts; execution/providers come next.
+- `runs/` is generated output and should remain untracked/ignored.
 
 ## Requirements
 - Python >= 3.14

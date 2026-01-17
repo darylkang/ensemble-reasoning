@@ -1,27 +1,42 @@
 # Vision
 
+## Purpose
+arbiter is a research harness for an arXiv-oriented study. The goal is a reproducible, auditable experimental pipeline, not a product or service.
+
 ## Thesis
-Reasoning outputs should be treated as a distribution over decisions/rationales, not a single output.
+A single answer is one sample. Reasoning should be treated as an induced decision distribution under an explicit configuration distribution `Q(c)`.
+
+## Formal Framing
+- Configuration tuple: `c = (m, d, p, π)` for model, decoding, prompt/persona, and protocol.
+- Label set: `Y` (a finite set of decisions) and decision `y ∈ Y`.
+- `Q(c)` defines how configurations are sampled.
+- The induced distribution is `P_Q(y|x)`, and its empirical estimate is `P̂_Q(y|x)`.
+
+## Uncertainty Types
+- Decision uncertainty: dispersion of `P̂_Q(·|x)` (entropy, margin, or similar).
+- Estimation uncertainty: uncertainty due to finite trials (confidence intervals, convergence diagnostics).
 
 ## Ensemble Reasoning
-Ensemble reasoning here means running repeated trials across a configuration distribution and aggregating the induced decision distribution. The ensemble is over trials and configurations (model, prompt framing, temperature, persona, and protocol). Debate and multi-agent interaction are optional and deferred beyond v0.
+Ensemble reasoning means repeated trials under `c ~ Q(c)` and aggregation of the induced decision distribution. Interaction and debate are treated as ablations, not assumptions.
 
 ## Heterogeneity Ladder
-- H0: single-shot (one trial per question).
-- H1: intra-model sampling (multiple trials via seeds/temperature).
-- H2: structured intra-model heterogeneity (personas/roles/framings plus sampling schedules).
-- H3: inter-model heterogeneity (multiple providers/models).
-- H4: interactive heterogeneity (debate or deliberative protocols).
+We separate four heterogeneity sources:
+- H0: single-shot baseline.
+- H1: decoding/sampling heterogeneity (temperature, seeds).
+- H2: prompt/persona heterogeneity (role, framing).
+- H3: cross-model heterogeneity (multiple providers/models).
+- H4: interaction heterogeneity (debate or deliberation protocols).
 
-v0 focuses on H0–H2 only.
+v0 focuses on H0–H2; H3/H4 are deferred.
 
-## What “Superior” Means
-We prioritize calibration and reliability signals, stability of decisions across trials, and visibility into dissenting rationales. Raw accuracy is secondary and never treated as sufficient on its own.
+## Budget Commitment
+The primary matched budget axis is number of model calls. Tokens and cost are logged as secondary metadata.
 
-## Non-Goals
-- Simulating human populations, juries, or demographics.
-- Building a production system or hosted service.
-- Creating a commercial product.
+## Scope Boundaries
+- No simulation of human populations or juries.
+- No claim that convergence implies correctness.
+- No claim that debate is always superior.
+- Not a production system or commercial product.
 
-## Terminology
-Let Q(c) denote an explicit distribution over configurations c (model, persona, prompt, temperature, protocol). The induced decision distribution is written as P_Q(y|x), where y is a normalized decision and x is the question. All reported statistics must reference Q(c).
+## Implications
+This vision is operationalized in `docs/spec.md`. Agent behavior and commit discipline are defined in `AGENTS.md`.
