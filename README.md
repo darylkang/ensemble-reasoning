@@ -17,16 +17,19 @@ The key framing is explicit configuration sampling `Q(c)` and the induced decisi
 - Python >= 3.14
 
 ## Install
-Editable install:
+From a local clone:
 
 ```bash
-pip install -e .
+git clone https://github.com/darylkang/ensemble-reasoning.git
+cd ensemble-reasoning
+python -m pip install -e .
 ```
 
-Install from Git (SSH):
+Direct from GitHub:
 
 ```bash
-pip install "git+ssh://git@github.com/<org>/ensemble-reasoning.git"
+python -m pip install "git+https://github.com/darylkang/ensemble-reasoning.git"
+python -m pip install "git+https://github.com/darylkang/ensemble-reasoning.git@main"
 ```
 
 ## Run
