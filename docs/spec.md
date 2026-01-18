@@ -1,4 +1,4 @@
-# Specification (v0)
+# Specification
 
 This document defines the high-level contract for arbiter. It is implementation-facing but intentionally light on mechanics.
 
@@ -15,8 +15,13 @@ This document defines the high-level contract for arbiter. It is implementation-
 - Trial: a single model call under a resolved configuration, storing raw output, transcript, and parsed decision.
 - Run: a collection of trials with a resolved configuration distribution, artifacts, and summary metrics.
 
+## Execution Unit
+- A Run targets one primary question by default.
+- Multi-question sets are a future extension; current artifact naming remains compatible.
+- `questions.jsonl` contains one question record in current usage.
+
 ## Decision Contract
-Every trial must emit a normalized categorical decision `y` from the allowed label set for the question. ABSTAIN is supported but OFF by default in v0. When enabled, ABSTAIN is an element of `Y` and should be reported explicitly; coverage-based evaluation should treat ABSTAIN as non-coverage rather than correctness.
+Every trial must emit a normalized categorical decision `y` from the allowed label set `Y` for the question. ABSTAIN is supported but OFF by default. When enabled, ABSTAIN is an element of `Y` and should be reported explicitly; coverage-based evaluation should treat ABSTAIN as non-coverage rather than correctness.
 
 ## Operational Distribution
 Decision distributions are defined with respect to an explicit configuration distribution `Q(c)`. `Q(c)` must be resolved and serialized in run artifacts so that `P_Q(y|x)` is well-defined and auditable.
@@ -25,44 +30,53 @@ Decision distributions are defined with respect to an explicit configuration dis
 - Decision uncertainty: dispersion of the induced decision distribution `P̂_Q(·|x)`.
 - Estimation uncertainty: confidence intervals on vote shares or estimator variability due to finite trials.
 
+Estimation uncertainty must be reported per instance, at minimum as a top-choice proportion CI. Aggregate bootstraps do not substitute for per-instance estimation uncertainty.
+
 Confidence intervals are NOT probabilities of correctness; they are estimation CIs on the induced distribution `P_Q(y|x)`.
 
 ## Budget Accounting
-The primary budget axis is the number of model calls. Token totals and cost estimates are logged on a best-effort basis later.
+The primary budget axis is the number of model calls. Token totals, cost estimates, and latency are logged on a best-effort basis as secondary metadata.
+
+## Trial Budget
+- `K_max` is the maximum trials cap for a run (user-specified).
+- Early stopping may halt sampling at `K <= K_max`.
+- The budget is interpreted as total trials for the question, not per-atom replicates.
+
+## Batching and Concurrency (Contract)
+- `W` is worker concurrency, a configurable parameter.
+- `B` is batch size, the number of trials launched between convergence checks.
+- Convergence is evaluated at batch boundaries.
+- `B` and `W` are related but not identical; `B` may be <= or >= `W`, and a common default is `B = W`.
 
 ## Convergence and Early Stopping
 - Sampling should be batched, with convergence checks at batch boundaries.
 - Stopping criteria may include CI width thresholds and/or stability of `P̂_Q(y|x)` across batches.
-- Convergence signals must be recorded when used.
+- Per-batch convergence metrics must be recorded in `metrics.json` under a `convergence_trace` array.
 
 ## Provenance and Reproducibility
 - Each run must serialize resolved configuration and capture environment and git metadata.
 - The manifest must include a `semantic_config_hash`, computed by hashing the resolved config with run-specific fields removed (e.g., run_id, timestamps, output_dir). This is distinct from the raw config hash.
 
-## v0 Scope
-Only H0–H2 are supported in v0. H3/H4 are deferred.
-
-## v0 Status
-- v0 currently: the wizard materializes `Q(c)` and writes `manifest.json` and `config.resolved.json`.
-- v0 near-term target: execute trials and produce trials/parsed/aggregates/metrics artifacts.
-
 ## CLI UX Target
 - arbiter run: interactive wizard that selects the question set, heterogeneity rung, and trial budget; writes a resolved config and executes.
-- arbiter analyze: optional, deferred command for aggregate analysis.
+- arbiter analyze: optional command for aggregate analysis.
 
 ## Artifact Bundle Contract (Run Folder)
 Each run writes a self-contained directory containing:
-- manifest.json (run id, timestamp, git SHA, config hash, python version)
+- manifest.json (run id, timestamp, git SHA, config hash, `semantic_config_hash`, python version)
 - config.resolved.json or config.resolved.yaml (fully resolved config, including `Q(c)` weights)
-- questions.jsonl (exact questions used)
+- questions.jsonl (exact questions used; one record in current usage)
 - trials.jsonl (one row per trial; includes transcript, raw output, metadata)
 - parsed.jsonl (normalized decision `y`, parse validity, structured fields)
 - aggregates.json (per-question distributions and uncertainty summaries)
-- metrics.json (run-level summaries; calibration only if gold labels exist)
+- metrics.json (run-level summaries; includes `convergence_trace` when applicable)
 - logs/ (optional)
 
-## Single-Question v0 Note
-v0 supports single-question runs. The question schema should remain extensible to multi-question sets without breaking artifacts.
+## Confidence Intervals (Current Default)
+Use Wilson intervals on the top-choice proportion and, optionally, on each per-label proportion. Report these per instance.
 
-## Confidence Intervals (v0)
-Use Wilson intervals on the top-choice proportion and, optionally, on each per-label proportion. Keep the estimator simple and transparent.
+## Current Status (Implementation Snapshot)
+This section is non-normative and expected to change.
+- The wizard materializes `Q(c)` and writes `manifest.json` and `config.resolved.json`.
+- Trial execution and derived artifacts (trials/parsed/aggregates/metrics) are not yet produced.
+- Currently supported heterogeneity rungs are H0–H2.
