@@ -24,6 +24,7 @@ from arbiter.config import (
     load_persona_ids,
     slugify_run_name,
 )
+from arbiter.env import load_dotenv
 from arbiter.manifest import Manifest, get_git_info, platform_info
 from arbiter.storage import cleanup_run_dir, compute_hash, create_run_dir, write_json
 from arbiter.llm.client import build_request_body
@@ -49,6 +50,7 @@ app.add_typer(llm_app, name="llm")
 @app.callback(invoke_without_command=True)
 def root(ctx: typer.Context) -> None:
     """Arbiter research harness CLI."""
+    load_dotenv()
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit(code=0)
