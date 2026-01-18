@@ -58,7 +58,7 @@ def get_git_info(cwd: Path) -> GitInfo:
             text=True,
         )
         sha = result.stdout.strip() or "unknown"
-    except subprocess.SubprocessError:
+    except (subprocess.SubprocessError, OSError):
         return GitInfo(sha=sha, dirty=dirty)
 
     try:
@@ -70,7 +70,7 @@ def get_git_info(cwd: Path) -> GitInfo:
             text=True,
         )
         dirty = bool(status.stdout.strip())
-    except subprocess.SubprocessError:
+    except (subprocess.SubprocessError, OSError):
         dirty = False
 
     return GitInfo(sha=sha, dirty=dirty)
