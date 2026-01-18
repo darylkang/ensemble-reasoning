@@ -56,7 +56,10 @@ def build_request_body(
     add_optional("tool_choice", request.tool_choice)
     add_optional("parallel_tool_calls", request.parallel_tool_calls)
 
-    provider = request.provider_routing or default_provider_routing
+    if request.provider_routing is None:
+        provider = default_provider_routing
+    else:
+        provider = request.provider_routing
     if provider is not None:
         body["provider"] = provider
 

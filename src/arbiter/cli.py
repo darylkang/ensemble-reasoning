@@ -210,22 +210,53 @@ def run_wizard() -> None:
 def llm_dry_run() -> None:
     """Build and display an OpenRouter request body without network access."""
     default_model = os.getenv("ARBITER_DEFAULT_MODEL", "openai/gpt-5")
-    request = LLMRequest(
-        messages=[{"role": "user", "content": "Say hello in one sentence."}],
-        model=default_model,
-        temperature=0.7,
-        provider_routing={"allow_fallbacks": False},
-        extra_body={"temperature": 0.1, "provider": {"allow_fallbacks": True}},
-        metadata={"mode": "dry_run"},
-    )
-    body, overrides = build_request_body(request, default_provider_routing={"allow_fallbacks": False})
     render_banner("arbiter", "LLM dry-run request preview")
-    render_step_header(1, 1, "Request body", "Merged request with override tracking.")
-    print(json.dumps(body, indent=2, sort_keys=True, ensure_ascii=True))
-    if overrides:
-        render_warning(f"Overrides applied: {', '.join(sorted(overrides))}")
-    else:
-        render_info("No overrides detected.")
+    default_routing = {"allow_fallbacks": False}
+
+    cases = [
+        (
+            "Defaults (provider_routing=None)",
+            LLMRequest(
+                messages=[{"role": "user", "content": "Say hello in one sentence."}],
+                model=default_model,
+                temperature=0.7,
+                provider_routing=None,
+                metadata={"mode": "dry_run"},
+            ),
+        ),
+        (
+            "Empty provider override (provider_routing={})",
+            LLMRequest(
+                messages=[{"role": "user", "content": "Say hello in one sentence."}],
+                model=default_model,
+                temperature=0.7,
+                provider_routing={},
+                metadata={"mode": "dry_run"},
+            ),
+        ),
+        (
+            "extra_body overrides provider",
+            LLMRequest(
+                messages=[{"role": "user", "content": "Say hello in one sentence."}],
+                model=default_model,
+                temperature=0.7,
+                provider_routing=None,
+                extra_body={"provider": {"allow_fallbacks": True}},
+                metadata={"mode": "dry_run"},
+            ),
+        ),
+    ]
+
+    for index, (title, request) in enumerate(cases, start=1):
+        body, overrides = build_request_body(request, default_provider_routing=default_routing)
+        render_step_header(index, len(cases), title, "Merged request with override tracking.")
+        print(json.dumps(body, indent=2, sort_keys=True, ensure_ascii=True))
+        if overrides:
+            render_warning(f"Overrides applied: {', '.join(sorted(overrides))}")
+        else:
+            render_info("No overrides detected.")
+        if index < len(cases):
+            render_gap(after_prompt=False)
 
 
 def _prompt_choice(prompt: str, choices: list[str], default: str) -> str:
