@@ -6,11 +6,12 @@ Arbiter is a research harness supporting an arXiv-oriented study. It prioritizes
 ## Thesis
 A single answer is one sample. Reasoning is modeled as an induced decision distribution under an explicit configuration distribution `Q(c)`.
 
-The estimand is the induced distribution `P_Q(y|x)`. The empirical estimate from finite trials is `P̂_Q(y|x)`. Changing `Q(c)` changes the estimand, so `Q(c)` must be explicit.
+The estimand is the induced distribution `P_Q(y|x)` where `x` is the instance. The empirical estimate from finite trials is `P̂_Q(y|x)`. Changing `Q(c)` changes the estimand, so `Q(c)` must be explicit.
 
 ## Formal Framing
 - Configuration tuple: `c = (m, d, p, π)` where `m` is model/provider, `d` is decoding parameters, `p` is prompt/persona framing, and `π` is protocol.
 - Label set: `Y`, with decision `y ∈ Y`.
+- The instance text is collected as a prompt in the CLI.
 - Each trial must output a normalized decision `y`; rationales are optional and may be free-form.
 
 ## Two Uncertainties

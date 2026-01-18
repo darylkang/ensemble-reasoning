@@ -62,7 +62,7 @@ def run_wizard() -> None:
     render_step_header(2, step_total, "Sampling design", "Choose rung, models, trials, and temperature policy.")
     heterogeneity_rung = _prompt_choice("Heterogeneity rung", ["H0", "H1", "H2"], "H1")
     models = _prompt_csv("Model identifiers (comma-separated)", "model-1")
-    k_max = _prompt_int("Trials per question", 16, min_value=1)
+    k_max = _prompt_int("Max trials (cap)", 16, min_value=1)
 
     temp_kind = _prompt_choice("Temperature policy", ["fixed", "list"], "fixed")
     if temp_kind == "fixed":
@@ -85,13 +85,13 @@ def run_wizard() -> None:
     render_gap(after_prompt=False)
 
     planned_total_trials = k_max
-    render_step_header(5, step_total, "Budget and output", "Set a per-question call guardrail and output path.")
+    render_step_header(5, step_total, "Budget and output", "Set a per-instance call guardrail and output path.")
     max_calls = _prompt_int(
-        "Max model calls (per question)",
+        "Max model calls (per instance)",
         planned_total_trials,
         min_value=1,
     )
-    budget_guardrail = BudgetGuardrail(max_calls=max_calls, scope="per_question")
+    budget_guardrail = BudgetGuardrail(max_calls=max_calls, scope="per_instance")
 
     output_base_dir_input = typer.prompt("Output base directory", default="./runs")
     output_base_dir = str(Path(output_base_dir_input.strip() or "./runs").expanduser())
@@ -103,11 +103,11 @@ def run_wizard() -> None:
     run_dir = create_run_dir(Path(output_base_dir), timestamp, run_slug)
     with status_spinner("Writing run artifacts"):
         try:
-            notes = ["Questions and trials are not executed in this round."]
+            notes = ["Instances and trials are not executed in this round."]
 
-            trial_budget = TrialBudget(k_max=k_max, scope="per_question")
+            trial_budget = TrialBudget(k_max=k_max, scope="per_instance")
             resolved_config = ResolvedConfig.build_from_wizard_inputs(
-                schema_version="0.2",
+                schema_version="0.3",
                 run_name=run_name,
                 run_slug=run_slug,
                 run_id=run_id,
@@ -144,9 +144,9 @@ def run_wizard() -> None:
                 config_hash=config_hash,
                 semantic_config_hash=semantic_config_hash,
                 planned_call_budget=max_calls,
-                planned_call_budget_scope="per_question",
+                planned_call_budget_scope="per_instance",
                 planned_total_trials=planned_total_trials,
-                planned_total_trials_scope="per_question",
+                planned_total_trials_scope="per_instance",
             )
             manifest_path = run_dir / "manifest.json"
             write_json(manifest_path, manifest.to_dict())
@@ -163,8 +163,8 @@ def run_wizard() -> None:
         "Rung": heterogeneity_rung,
         "Q(c) atoms": str(len(q_distribution.atoms)),
         "Weight sum": f"{weight_sum:.6f}",
-        "K_max": str(planned_total_trials),
-        "Max calls/q": str(max_calls),
+        "Max trials (cap)": str(planned_total_trials),
+        "Max calls/instance": str(max_calls),
     }
     render_summary_table(summary)
     render_info("Next step: execution is not implemented in this round.")

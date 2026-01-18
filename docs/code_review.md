@@ -16,7 +16,7 @@
 - Schema drift risk: `ResolvedConfig` exists but the CLI constructs a raw dict and bypasses the dataclass.  
   Reference: `src/arbiter/config.py:107-128`, `src/arbiter/cli.py:143-152`.  
   Recommendation: route CLI assembly through a `ResolvedConfig` builder or factory to keep schema changes centralized.
-- Budget semantics are encoded in the wizard and computed as `len(atoms) * trials_per_question`, which will conflict with the `K_max` semantics in the spec.  
+- Budget semantics should remain a total-cap `trial_budget.k_max` per instance and must not be multiplied by Q(c) size.  
   Reference: `src/arbiter/cli.py:63-173`.  
   Recommendation: move budget semantics into config with explicit `K_max` and keep planning logic separate from Q(c) size.
 - Semantic vs run-specific metadata is mixed under `run` in the resolved config, making semantic hashing and reproducibility harder.  
