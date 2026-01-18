@@ -13,7 +13,7 @@ This document defines the high-level contract for arbiter. It is implementation-
 ## Core Objects
 - Question: an immutable prompt with a stable question_id, optional choices/labels, and optional gold label.
 - Trial: a single model call under a resolved configuration, storing raw output, transcript, and parsed decision.
-- Run: a collection of trials with a resolved configuration distribution, artifacts, and summary metrics.
+- Run: a collection of trials for one primary question by default, with a resolved configuration distribution, artifacts, and summary metrics.
 
 ## Execution Unit
 - A Run targets one primary question by default.
@@ -28,7 +28,7 @@ Decision distributions are defined with respect to an explicit configuration dis
 
 ## Uncertainty Types
 - Decision uncertainty: dispersion of the induced decision distribution `P̂_Q(·|x)`.
-- Estimation uncertainty: confidence intervals on vote shares or estimator variability due to finite trials.
+- Estimation uncertainty (meta-uncertainty): confidence intervals on vote shares or estimator variability due to finite trials.
 
 Estimation uncertainty must be reported per instance, at minimum as a top-choice proportion CI. Aggregate bootstraps do not substitute for per-instance estimation uncertainty.
 
@@ -43,7 +43,8 @@ The primary budget axis is the number of model calls. Token totals, cost estimat
 - The budget is interpreted as total trials for the question, not per-atom replicates.
 
 ## Batching and Concurrency (Contract)
-- `W` is worker concurrency, a configurable parameter.
+- Trials may execute asynchronously within each batch.
+- `W` is worker concurrency, a configurable parameter for in-flight trials.
 - `B` is batch size, the number of trials launched between convergence checks.
 - Convergence is evaluated at batch boundaries.
 - `B` and `W` are related but not identical; `B` may be <= or >= `W`, and a common default is `B = W`.
@@ -58,7 +59,7 @@ The primary budget axis is the number of model calls. Token totals, cost estimat
 - The manifest must include a `semantic_config_hash`, computed by hashing the resolved config with run-specific fields removed (e.g., run_id, timestamps, output_dir). This is distinct from the raw config hash.
 
 ## CLI UX Target
-- arbiter run: interactive wizard that selects the question set, heterogeneity rung, and trial budget; writes a resolved config and executes.
+- arbiter run: interactive wizard that collects a single question, heterogeneity rung, and trial budget; writes a resolved config and executes.
 - arbiter analyze: optional command for aggregate analysis.
 
 ## Artifact Bundle Contract (Run Folder)
