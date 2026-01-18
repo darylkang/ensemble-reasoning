@@ -7,7 +7,7 @@ from itertools import product
 import json
 from pathlib import Path
 import re
-from typing import Iterable
+from typing import Any, Iterable
 
 
 @dataclass(frozen=True)
@@ -47,6 +47,52 @@ class BudgetGuardrail:
         return {
             "max_calls": self.max_calls,
             "scope": self.scope,
+        }
+
+
+@dataclass(frozen=True)
+class LLMRequestDefaults:
+    temperature: float | None
+    top_p: float | None
+    max_tokens: int | None
+    seed: int | None
+    stop: list[str] | str | None
+    response_format: dict[str, Any] | str | None
+    tools: list[dict[str, Any]] | None
+    tool_choice: dict[str, Any] | str | None
+    parallel_tool_calls: bool | None
+
+    def to_dict(self) -> dict:
+        return {
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "max_tokens": self.max_tokens,
+            "seed": self.seed,
+            "stop": self.stop,
+            "response_format": self.response_format,
+            "tools": self.tools,
+            "tool_choice": self.tool_choice,
+            "parallel_tool_calls": self.parallel_tool_calls,
+        }
+
+
+@dataclass(frozen=True)
+class LLMConfig:
+    client: str
+    mode: str
+    model: str
+    request_defaults: LLMRequestDefaults
+    routing_defaults: dict[str, Any]
+    extra_body_defaults: dict[str, Any]
+
+    def to_dict(self) -> dict:
+        return {
+            "client": self.client,
+            "mode": self.mode,
+            "model": self.model,
+            "request_defaults": self.request_defaults.to_dict(),
+            "routing_defaults": self.routing_defaults,
+            "extra_body_defaults": self.extra_body_defaults,
         }
 
 
@@ -142,6 +188,7 @@ class ResolvedConfig:
         started_at: str,
         heterogeneity_rung: str,
         models: list[str],
+        llm: "LLMConfig",
         temperature_policy: TemperaturePolicy,
         personas: PersonaPolicy,
         trial_budget: TrialBudget,
@@ -160,6 +207,7 @@ class ResolvedConfig:
         semantic = SemanticConfig(
             heterogeneity_rung=heterogeneity_rung,
             models=models,
+            llm=llm,
             temperature_policy=temperature_policy,
             personas=personas,
             trial_budget=trial_budget,
@@ -173,6 +221,7 @@ class ResolvedConfig:
 class SemanticConfig:
     heterogeneity_rung: str
     models: list[str]
+    llm: LLMConfig
     temperature_policy: TemperaturePolicy
     personas: PersonaPolicy
     trial_budget: TrialBudget
@@ -183,6 +232,7 @@ class SemanticConfig:
         return {
             "heterogeneity_rung": self.heterogeneity_rung,
             "models": self.models,
+            "llm": self.llm.to_dict(),
             "temperature_policy": self.temperature_policy.to_dict(),
             "personas": self.personas.to_dict(),
             "trial_budget": self.trial_budget.to_dict(),

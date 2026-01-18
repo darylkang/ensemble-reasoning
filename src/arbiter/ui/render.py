@@ -63,6 +63,18 @@ def render_warning(text: str) -> None:
     console.print(text, style="warning", markup=False)
 
 
+def render_notice(text: str) -> None:
+    console = get_console()
+    panel = Panel(
+        Text(text, style="warning"),
+        box=box.ROUNDED,
+        border_style="warning",
+        padding=(0, 2),
+        expand=True,
+    )
+    console.print(panel)
+
+
 def render_success(text: str) -> None:
     console = get_console()
     console.print(text, style="success", markup=False)

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
+import os
 from pathlib import Path
 import platform
 import uuid
@@ -11,6 +13,8 @@ import typer
 
 from arbiter.config import (
     BudgetGuardrail,
+    LLMConfig,
+    LLMRequestDefaults,
     PersonaPolicy,
     ResolvedConfig,
     TemperaturePolicy,
@@ -22,12 +26,15 @@ from arbiter.config import (
 )
 from arbiter.manifest import Manifest, get_git_info, platform_info
 from arbiter.storage import cleanup_run_dir, compute_hash, create_run_dir, write_json
+from arbiter.llm.client import build_request_body
+from arbiter.llm.types import LLMRequest
 from arbiter.ui.progress import status_spinner
 from arbiter.ui.render import (
     render_banner,
     render_error,
     render_gap,
     render_info,
+    render_notice,
     render_step_header,
     render_success,
     render_summary_table,
@@ -35,6 +42,8 @@ from arbiter.ui.render import (
 )
 
 app = typer.Typer(add_completion=False, help="Research harness for ensemble reasoning.")
+llm_app = typer.Typer(add_completion=False, help="LLM utilities and diagnostics.")
+app.add_typer(llm_app, name="llm")
 
 
 @app.callback(invoke_without_command=True)
@@ -51,6 +60,11 @@ def run_wizard() -> None:
     render_banner("arbiter", "Ensemble reasoning run setup")
 
     started_at = datetime.now(timezone.utc)
+    default_model = os.getenv("ARBITER_DEFAULT_MODEL", "openai/gpt-5")
+    api_key_present = bool(os.getenv("OPENROUTER_API_KEY"))
+    llm_mode = "openrouter" if api_key_present else "mock"
+    if not api_key_present:
+        render_notice("OpenRouter API key not found. Remote calls are disabled; using mock client.")
 
     step_total = 6
     render_step_header(1, step_total, "Run identity", "Label the run for traceability.")
@@ -61,7 +75,7 @@ def run_wizard() -> None:
 
     render_step_header(2, step_total, "Sampling design", "Choose rung, models, trials, and temperature policy.")
     heterogeneity_rung = _prompt_choice("Heterogeneity rung", ["H0", "H1", "H2"], "H1")
-    models = _prompt_csv("Model identifiers (comma-separated)", "model-1")
+    models = _prompt_csv("Model slugs (comma-separated)", default_model)
     k_max = _prompt_int("Max trials (cap)", 16, min_value=1)
 
     temp_kind = _prompt_choice("Temperature policy", ["fixed", "list"], "fixed")
@@ -104,10 +118,31 @@ def run_wizard() -> None:
     with status_spinner("Writing run artifacts"):
         try:
             notes = ["Instances and trials are not executed in this round."]
+            if llm_mode == "mock":
+                notes.append("OpenRouter API key missing; LLM mode set to mock.")
 
             trial_budget = TrialBudget(k_max=k_max, scope="per_instance")
+            llm_request_defaults = LLMRequestDefaults(
+                temperature=temperatures[0] if temp_kind == "fixed" else None,
+                top_p=None,
+                max_tokens=None,
+                seed=None,
+                stop=None,
+                response_format=None,
+                tools=None,
+                tool_choice=None,
+                parallel_tool_calls=None,
+            )
+            llm_config = LLMConfig(
+                client="openrouter",
+                mode=llm_mode,
+                model=models[0],
+                request_defaults=llm_request_defaults,
+                routing_defaults={"allow_fallbacks": False},
+                extra_body_defaults={},
+            )
             resolved_config = ResolvedConfig.build_from_wizard_inputs(
-                schema_version="0.3",
+                schema_version="0.4",
                 run_name=run_name,
                 run_slug=run_slug,
                 run_id=run_id,
@@ -116,6 +151,7 @@ def run_wizard() -> None:
                 started_at=started_at.isoformat(),
                 heterogeneity_rung=heterogeneity_rung,
                 models=models,
+                llm=llm_config,
                 temperature_policy=temperature_policy,
                 personas=persona_policy,
                 trial_budget=trial_budget,
@@ -168,6 +204,28 @@ def run_wizard() -> None:
     }
     render_summary_table(summary)
     render_info("Next step: execution is not implemented in this round.")
+
+
+@llm_app.command("dry-run")
+def llm_dry_run() -> None:
+    """Build and display an OpenRouter request body without network access."""
+    default_model = os.getenv("ARBITER_DEFAULT_MODEL", "openai/gpt-5")
+    request = LLMRequest(
+        messages=[{"role": "user", "content": "Say hello in one sentence."}],
+        model=default_model,
+        temperature=0.7,
+        provider_routing={"allow_fallbacks": False},
+        extra_body={"temperature": 0.1, "provider": {"allow_fallbacks": True}},
+        metadata={"mode": "dry_run"},
+    )
+    body, overrides = build_request_body(request, default_provider_routing={"allow_fallbacks": False})
+    render_banner("arbiter", "LLM dry-run request preview")
+    render_step_header(1, 1, "Request body", "Merged request with override tracking.")
+    print(json.dumps(body, indent=2, sort_keys=True, ensure_ascii=True))
+    if overrides:
+        render_warning(f"Overrides applied: {', '.join(sorted(overrides))}")
+    else:
+        render_info("No overrides detected.")
 
 
 def _prompt_choice(prompt: str, choices: list[str], default: str) -> str:
