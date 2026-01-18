@@ -19,6 +19,9 @@ The key framing is explicit configuration sampling `Q(c)` and the induced decisi
 - Python >= 3.14
 - `OPENROUTER_API_KEY` is required for remote OpenRouter calls; when absent, runs record `llm.mode = mock`.
 
+## Configuration
+Copy `.env.example` to `.env`, fill in values, and keep `.env` untracked. Arbiter reads these environment variables at runtime.
+
 ## Install
 From a local clone:
 
