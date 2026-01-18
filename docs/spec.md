@@ -31,6 +31,16 @@ Decision distributions are defined with respect to an explicit configuration dis
 - `semantic` includes the heterogeneity rung, decoding settings, persona policy, `trial_budget` with `k_max`, call guardrails, and the explicit `Q(c)` atoms/weights.
 - `run` includes run identifiers and output paths; timestamps may be included for provenance.
 
+## LLM Configuration
+- `semantic.llm.client` is fixed to `openrouter` to reflect the sole network provider.
+- `semantic.llm.mode` records `openrouter` or `mock` to reflect whether remote calls are enabled.
+- `semantic.llm.model` is the OpenRouter model slug used for requests.
+- `semantic.llm.request_defaults` stores OpenAI-compatible parameters (temperature, top_p, max_tokens, seed, stop, response_format, tools, tool_choice, parallel_tool_calls).
+- `semantic.llm.routing_defaults` stores OpenRouter routing defaults, with `allow_fallbacks` set to `false` in measurement mode.
+- `semantic.llm.extra_body_defaults` stores additional request fields for passthrough.
+
+Routing defaults must not silently enable fallbacks. Overrides must be explicit and auditable.
+
 ## Uncertainty Types
 - Decision uncertainty: dispersion of the induced decision distribution `P̂_Q(·|x)`.
 - Estimation uncertainty (meta-uncertainty): confidence intervals on vote shares or estimator variability due to finite trials.

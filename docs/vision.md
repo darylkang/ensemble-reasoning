@@ -11,7 +11,7 @@ The estimand is the induced distribution `P_Q(y|x)` where `x` is the instance. T
 ## Formal Framing
 - Configuration tuple: `c = (m, d, p, π)` where `m` is model/provider, `d` is decoding parameters, `p` is prompt/persona framing, and `π` is protocol.
 - Label set: `Y`, with decision `y ∈ Y`.
-- The instance text is collected as a prompt in the CLI.
+- The instance text is the prompt shown to the model.
 - Each trial must output a normalized decision `y`; rationales are optional and may be free-form.
 
 ## Two Uncertainties

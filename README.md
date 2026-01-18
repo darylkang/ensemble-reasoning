@@ -17,6 +17,7 @@ The key framing is explicit configuration sampling `Q(c)` and the induced decisi
 
 ## Requirements
 - Python >= 3.14
+- `OPENROUTER_API_KEY` is required for remote OpenRouter calls; when absent, runs record `llm.mode = mock`.
 
 ## Install
 From a local clone:
@@ -39,6 +40,7 @@ python -m pip install "git+https://github.com/darylkang/ensemble-reasoning.git@m
 ```bash
 arbiter --help
 arbiter run
+arbiter llm dry-run
 ```
 
 ## Docs
