@@ -38,10 +38,10 @@ class OpenRouterClient:
             raise ValueError("OPENROUTER_API_KEY is required for OpenRouterClient.")
         self._api_key = resolved_key
         self._base_url = base_url or os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-        self._client = httpx.Client(base_url=self._base_url, timeout=timeout_s)
+        self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout_s)
         self._default_routing = default_routing or {"allow_fallbacks": False}
 
-    def complete(self, request: LLMRequest) -> LLMResponse:
+    async def generate(self, request: LLMRequest) -> LLMResponse:
         body, overrides = build_request_body(
             request,
             default_provider_routing=self._default_routing,
@@ -56,7 +56,7 @@ class OpenRouterClient:
             headers[key] = value
 
         start = time.monotonic()
-        response = self._client.post("/chat/completions", json=body, headers=headers)
+        response = await self._client.post("/chat/completions", json=body, headers=headers)
         latency_ms = int((time.monotonic() - start) * 1000)
         request_id = _extract_request_id(response.headers)
 
@@ -88,8 +88,8 @@ class OpenRouterClient:
             request_id=request_id,
         )
 
-    def list_models(self) -> dict[str, Any]:
-        response = self._client.get("/models", headers=_auth_headers(self._api_key))
+    async def list_models(self) -> dict[str, Any]:
+        response = await self._client.get("/models", headers=_auth_headers(self._api_key))
         request_id = _extract_request_id(response.headers)
         if response.status_code < 200 or response.status_code >= 300:
             raise OpenRouterError(
@@ -99,6 +99,15 @@ class OpenRouterClient:
                 request={"endpoint": "/models"},
             )
         return response.json()
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def __aenter__(self) -> "OpenRouterClient":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.aclose()
 
 
 def _extract_request_id(headers: httpx.Headers) -> str | None:

@@ -9,11 +9,14 @@ from arbiter.llm.types import LLMRequest, LLMResponse
 
 @runtime_checkable
 class LLMClient(Protocol):
-    def complete(self, request: LLMRequest) -> LLMResponse:
+    async def generate(self, request: LLMRequest) -> LLMResponse:
         """Execute a single completion request."""
 
-    def list_models(self) -> dict[str, Any]:
+    async def list_models(self) -> dict[str, Any]:
         """Return available models metadata."""
+
+    async def aclose(self) -> None:
+        """Release any underlying client resources."""
 
 
 def create_client(mode: str, **kwargs: Any) -> LLMClient:
