@@ -51,24 +51,34 @@ class BudgetGuardrail:
 
 
 @dataclass(frozen=True)
-class RunConfig:
+class TrialBudget:
+    k_max: int
+    scope: str
+
+    def to_dict(self) -> dict:
+        return {
+            "k_max": self.k_max,
+            "scope": self.scope,
+        }
+
+
+@dataclass(frozen=True)
+class RunMetadata:
     name: str
     slug: str
     run_id: str
-    heterogeneity_rung: str
-    trials_per_question: int
     output_base_dir: str
     output_dir: str
+    started_at: str
 
     def to_dict(self) -> dict:
         return {
             "name": self.name,
             "slug": self.slug,
             "run_id": self.run_id,
-            "heterogeneity_rung": self.heterogeneity_rung,
-            "trials_per_question": self.trials_per_question,
             "output_base_dir": self.output_base_dir,
             "output_dir": self.output_dir,
+            "started_at": self.started_at,
         }
 
 
@@ -107,26 +117,78 @@ class QDistribution:
 @dataclass(frozen=True)
 class ResolvedConfig:
     schema_version: str
-    run: RunConfig
-    models: list[str]
-    temperature_policy: TemperaturePolicy
-    personas: PersonaPolicy
-    budget_guardrail: BudgetGuardrail
-    q_distribution: QDistribution
+    run: RunMetadata
+    semantic: "SemanticConfig"
     notes: list[str]
 
     def to_dict(self) -> dict:
         return {
             "schema_version": self.schema_version,
             "run": self.run.to_dict(),
-            "models": self.models,
-            "temperature_policy": self.temperature_policy.to_dict(),
-            "personas": self.personas.to_dict(),
-            "budget_guardrail": self.budget_guardrail.to_dict(),
-            "q_distribution": self.q_distribution.to_dict(),
+            "semantic": self.semantic.to_dict(),
             "notes": self.notes,
         }
 
+    @classmethod
+    def build_from_wizard_inputs(
+        cls,
+        *,
+        schema_version: str,
+        run_name: str,
+        run_slug: str,
+        run_id: str,
+        output_base_dir: str,
+        output_dir: str,
+        started_at: str,
+        heterogeneity_rung: str,
+        models: list[str],
+        temperature_policy: TemperaturePolicy,
+        personas: PersonaPolicy,
+        trial_budget: TrialBudget,
+        budget_guardrail: BudgetGuardrail,
+        q_distribution: QDistribution,
+        notes: list[str],
+    ) -> "ResolvedConfig":
+        run = RunMetadata(
+            name=run_name,
+            slug=run_slug,
+            run_id=run_id,
+            output_base_dir=output_base_dir,
+            output_dir=output_dir,
+            started_at=started_at,
+        )
+        semantic = SemanticConfig(
+            heterogeneity_rung=heterogeneity_rung,
+            models=models,
+            temperature_policy=temperature_policy,
+            personas=personas,
+            trial_budget=trial_budget,
+            budget_guardrail=budget_guardrail,
+            q_distribution=q_distribution,
+        )
+        return cls(schema_version=schema_version, run=run, semantic=semantic, notes=notes)
+
+
+@dataclass(frozen=True)
+class SemanticConfig:
+    heterogeneity_rung: str
+    models: list[str]
+    temperature_policy: TemperaturePolicy
+    personas: PersonaPolicy
+    trial_budget: TrialBudget
+    budget_guardrail: BudgetGuardrail
+    q_distribution: QDistribution
+
+    def to_dict(self) -> dict:
+        return {
+            "heterogeneity_rung": self.heterogeneity_rung,
+            "models": self.models,
+            "temperature_policy": self.temperature_policy.to_dict(),
+            "personas": self.personas.to_dict(),
+            "trial_budget": self.trial_budget.to_dict(),
+            "budget_guardrail": self.budget_guardrail.to_dict(),
+            "q_distribution": self.q_distribution.to_dict(),
+        }
 
 @dataclass(frozen=True)
 class PersonaLoadResult:

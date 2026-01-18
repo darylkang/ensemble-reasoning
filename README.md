@@ -12,6 +12,7 @@ The key framing is explicit configuration sampling `Q(c)` and the induced decisi
 
 ## Current status
 - `arbiter run` sets up runs and writes run folder artifacts; execution/providers come next.
+- `config.resolved.json` separates `run` metadata from `semantic` config (including `trial_budget.k_max`).
 - `runs/` is generated output and should remain untracked/ignored.
 
 ## Requirements

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import shutil
 
 
 def compute_hash(payload: dict) -> str:
@@ -32,3 +33,12 @@ def create_run_dir(base_dir: Path, timestamp: str, slug: str) -> Path:
             alternate.mkdir()
             return alternate
         counter += 1
+
+
+def cleanup_run_dir(run_dir: Path) -> None:
+    try:
+        shutil.rmtree(run_dir)
+    except FileNotFoundError:
+        return
+    except OSError:
+        return

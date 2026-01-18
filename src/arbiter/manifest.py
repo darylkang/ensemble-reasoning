@@ -24,6 +24,7 @@ class Manifest:
     python_version: str
     platform: dict
     config_hash: str
+    semantic_config_hash: str
     planned_call_budget: int
     planned_call_budget_scope: str
     planned_total_trials: int
@@ -39,6 +40,7 @@ class Manifest:
             "python_version": self.python_version,
             "platform": self.platform,
             "config_hash": self.config_hash,
+            "semantic_config_hash": self.semantic_config_hash,
             "planned_call_budget": self.planned_call_budget,
             "planned_call_budget_scope": self.planned_call_budget_scope,
             "planned_total_trials": self.planned_total_trials,

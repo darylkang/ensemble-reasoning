@@ -26,6 +26,11 @@ Every trial must emit a normalized categorical decision `y` from the allowed lab
 ## Operational Distribution
 Decision distributions are defined with respect to an explicit configuration distribution `Q(c)`. `Q(c)` must be resolved and serialized in run artifacts so that `P_Q(y|x)` is well-defined and auditable.
 
+## Resolved Config Structure
+- `config.resolved.json` must separate `run` metadata from `semantic` configuration.
+- `semantic` includes the heterogeneity rung, decoding settings, persona policy, `trial_budget` with `k_max`, call guardrails, and the explicit `Q(c)` atoms/weights.
+- `run` includes run identifiers and output paths; timestamps may be included for provenance.
+
 ## Uncertainty Types
 - Decision uncertainty: dispersion of the induced decision distribution `P̂_Q(·|x)`.
 - Estimation uncertainty (meta-uncertainty): confidence intervals on vote shares or estimator variability due to finite trials.
@@ -65,7 +70,7 @@ The primary budget axis is the number of model calls. Token totals, cost estimat
 ## Artifact Bundle Contract (Run Folder)
 Each run writes a self-contained directory containing:
 - manifest.json (run id, timestamp, git SHA, config hash, `semantic_config_hash`, python version)
-- config.resolved.json or config.resolved.yaml (fully resolved config, including `Q(c)` weights)
+- config.resolved.json or config.resolved.yaml (resolved config with `run` metadata, `semantic` config, and `Q(c)` weights)
 - questions.jsonl (exact questions used; one record in current usage)
 - trials.jsonl (one row per trial; includes transcript, raw output, metadata)
 - parsed.jsonl (normalized decision `y`, parse validity, structured fields)
