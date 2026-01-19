@@ -188,7 +188,7 @@ def run_wizard() -> None:
                 extra_body_defaults={},
             )
             resolved_config = ResolvedConfig.build_from_wizard_inputs(
-                schema_version="0.4",
+                schema_version="0.5",
                 run_name=run_name,
                 run_slug=run_slug,
                 run_id=run_id,

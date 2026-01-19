@@ -35,6 +35,7 @@ Decision distributions are defined with respect to an explicit configuration dis
 
 ## Resolved Config Structure
 - `config.resolved.json` must separate `run` metadata from `semantic` configuration.
+- `schema_version` identifies the config schema; breaking changes bump this value (current: `0.5`).
 - `semantic` includes the heterogeneity rung, decoding settings, persona policy, `trial_budget` with `k_max`, call guardrails, `execution` controls, and the explicit `Q(c)` atoms/weights.
 - `execution` includes `worker_count`, `batch_size`, `max_retries`, and `convergence` thresholds (`epsilon_ci_half_width`, `min_trials`, `patience_batches`).
 - `run` includes run identifiers and output paths; timestamps may be included for provenance.
