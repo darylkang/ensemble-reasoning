@@ -97,6 +97,36 @@ class LLMConfig:
 
 
 @dataclass(frozen=True)
+class ConvergenceConfig:
+    epsilon_ci_half_width: float
+    min_trials: int
+    patience_batches: int
+
+    def to_dict(self) -> dict:
+        return {
+            "epsilon_ci_half_width": self.epsilon_ci_half_width,
+            "min_trials": self.min_trials,
+            "patience_batches": self.patience_batches,
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionConfig:
+    worker_count: int
+    batch_size: int
+    max_retries: int
+    convergence: ConvergenceConfig
+
+    def to_dict(self) -> dict:
+        return {
+            "worker_count": self.worker_count,
+            "batch_size": self.batch_size,
+            "max_retries": self.max_retries,
+            "convergence": self.convergence.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
 class TrialBudget:
     k_max: int
     scope: str
@@ -189,6 +219,7 @@ class ResolvedConfig:
         heterogeneity_rung: str,
         models: list[str],
         llm: "LLMConfig",
+        execution: "ExecutionConfig",
         temperature_policy: TemperaturePolicy,
         personas: PersonaPolicy,
         trial_budget: TrialBudget,
@@ -208,6 +239,7 @@ class ResolvedConfig:
             heterogeneity_rung=heterogeneity_rung,
             models=models,
             llm=llm,
+            execution=execution,
             temperature_policy=temperature_policy,
             personas=personas,
             trial_budget=trial_budget,
@@ -222,6 +254,7 @@ class SemanticConfig:
     heterogeneity_rung: str
     models: list[str]
     llm: LLMConfig
+    execution: ExecutionConfig
     temperature_policy: TemperaturePolicy
     personas: PersonaPolicy
     trial_budget: TrialBudget
@@ -233,6 +266,7 @@ class SemanticConfig:
             "heterogeneity_rung": self.heterogeneity_rung,
             "models": self.models,
             "llm": self.llm.to_dict(),
+            "execution": self.execution.to_dict(),
             "temperature_policy": self.temperature_policy.to_dict(),
             "personas": self.personas.to_dict(),
             "trial_budget": self.trial_budget.to_dict(),

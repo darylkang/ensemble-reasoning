@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import time
 from typing import Any
 
@@ -69,10 +70,14 @@ class MockClient:
 
 
 def _mock_text(request: LLMRequest, model: str) -> str:
+    labels = _extract_labels(request)
     seed_bytes = _stable_seed(request, model)
-    choice = seed_bytes[0] % 2
-    label = "YES" if choice == 0 else "NO"
-    return f"Decision: {label}\nRationale: mock response for {model}."
+    label = labels[seed_bytes[0] % len(labels)]
+    payload = {
+        "decision": label,
+        "rationale": f"mock response for {model}.",
+    }
+    return json.dumps(payload, ensure_ascii=True)
 
 
 def _stable_seed(request: LLMRequest, model: str) -> bytes:
@@ -80,9 +85,23 @@ def _stable_seed(request: LLMRequest, model: str) -> bytes:
     hasher.update(model.encode("utf-8"))
     for message in request.messages:
         hasher.update(str(message).encode("utf-8"))
+    if request.temperature is not None:
+        hasher.update(str(request.temperature).encode("utf-8"))
+    labels = request.metadata.get("labels")
+    if isinstance(labels, list):
+        hasher.update(",".join(str(label) for label in labels).encode("utf-8"))
     if request.seed is not None:
         hasher.update(str(request.seed).encode("utf-8"))
     return hasher.digest()
+
+
+def _extract_labels(request: LLMRequest) -> list[str]:
+    labels = request.metadata.get("labels")
+    if isinstance(labels, list):
+        normalized = [str(label) for label in labels if str(label)]
+        if normalized:
+            return normalized
+    return ["YES", "NO"]
 
 
 def _mock_usage(request: LLMRequest, text: str) -> dict[str, Any]:

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,6 +15,8 @@ import typer
 
 from arbiter.config import (
     BudgetGuardrail,
+    ConvergenceConfig,
+    ExecutionConfig,
     LLMConfig,
     LLMRequestDefaults,
     PersonaPolicy,
@@ -24,6 +28,7 @@ from arbiter.config import (
     load_persona_ids,
     slugify_run_name,
 )
+from arbiter.engine import execute_trials
 from arbiter.env import load_dotenv
 from arbiter.manifest import Manifest, get_git_info, platform_info
 from arbiter.storage import cleanup_run_dir, compute_hash, create_run_dir, write_json
@@ -68,14 +73,31 @@ def run_wizard() -> None:
     if not api_key_present:
         render_notice("OpenRouter API key not found. Remote calls are disabled; using mock client.")
 
-    step_total = 6
+    step_total = 9
     render_step_header(1, step_total, "Run identity", "Label the run for traceability.")
     run_name_input = typer.prompt("Run name (optional)", default="", show_default=False)
     run_name = run_name_input.strip() or "auto"
     run_slug = slugify_run_name(run_name)
     render_gap(after_prompt=True)
 
-    render_step_header(2, step_total, "Sampling design", "Choose rung, models, trials, and temperature policy.")
+    render_step_header(2, step_total, "Instance and decision contract", "Provide the prompt and allowed labels.")
+    prompt_text = _prompt_text("Prompt text (single line; use \\n for newlines)")
+    labels = _prompt_csv("Decision labels (comma-separated)", "YES,NO")
+    enable_abstain = _prompt_bool("Enable ABSTAIN?", default=False)
+    if enable_abstain and "ABSTAIN" not in labels:
+        labels.append("ABSTAIN")
+    gold_label = _prompt_optional_label("Gold label (optional)", labels)
+    instance_id = _build_instance_id(prompt_text)
+    instance_record = {
+        "instance_id": instance_id,
+        "prompt": prompt_text,
+        "labels": labels,
+        "gold": gold_label,
+        "metadata": {"abstain_enabled": enable_abstain},
+    }
+    render_gap(after_prompt=True)
+
+    render_step_header(3, step_total, "Sampling design", "Choose rung, models, trial cap, and temperature policy.")
     heterogeneity_rung = _prompt_choice("Heterogeneity rung", ["H0", "H1", "H2"], "H1")
     models = _prompt_csv("Model slugs (comma-separated)", default_model)
     k_max = _prompt_int("Max trials (cap)", 16, min_value=1)
@@ -89,19 +111,40 @@ def run_wizard() -> None:
         temperature_policy = TemperaturePolicy(kind="list", temperatures=temperatures)
     render_gap(after_prompt=True)
 
-    render_step_header(3, step_total, "Personas", "Optionally provide a persona bank and selection mode.")
+    render_step_header(4, step_total, "Personas", "Optionally provide a persona bank and selection mode.")
     persona_policy = _prompt_persona_policy()
     render_gap(after_prompt=True)
 
     persona_ids_for_q = persona_policy.persona_ids if persona_policy.selection_mode == "sample_uniform" else None
-    render_step_header(4, step_total, "Materialize Q(c)", "Generate the explicit configuration distribution.")
+    render_step_header(5, step_total, "Execution controls", "Set concurrency and convergence thresholds.")
+    worker_count = _prompt_int("Worker concurrency (W)", 8, min_value=1)
+    batch_size = _prompt_int("Batch size (B)", worker_count, min_value=1)
+    epsilon = _prompt_float("CI half-width threshold (epsilon)", 0.05)
+    min_trials_default = max(batch_size, 16)
+    min_trials = _prompt_int("Minimum valid trials before early stop", min_trials_default, min_value=1)
+    patience_batches = _prompt_int("Patience batches", 2, min_value=1)
+    max_retries = _prompt_int("Max parse retries per trial", 2, min_value=0)
+    convergence_config = ConvergenceConfig(
+        epsilon_ci_half_width=epsilon,
+        min_trials=min_trials,
+        patience_batches=patience_batches,
+    )
+    execution_config = ExecutionConfig(
+        worker_count=worker_count,
+        batch_size=batch_size,
+        max_retries=max_retries,
+        convergence=convergence_config,
+    )
+    render_gap(after_prompt=True)
+
+    render_step_header(6, step_total, "Materialize Q(c)", "Generate the explicit configuration distribution.")
     with status_spinner("Materializing Q(c)"):
         q_distribution = build_q_distribution(models, temperatures, persona_ids_for_q)
     render_success(f"Q(c) materialized with {len(q_distribution.atoms)} atoms.")
     render_gap(after_prompt=False)
 
     planned_total_trials = k_max
-    render_step_header(5, step_total, "Budget and output", "Set a per-instance call guardrail and output path.")
+    render_step_header(7, step_total, "Budget and output", "Set a per-instance call guardrail and output path.")
     max_calls = _prompt_int(
         "Max model calls (per instance)",
         planned_total_trials,
@@ -113,16 +156,17 @@ def run_wizard() -> None:
     output_base_dir = str(Path(output_base_dir_input.strip() or "./runs").expanduser())
     render_gap(after_prompt=True)
 
-    render_step_header(6, step_total, "Write run artifacts", "Write manifest and resolved config to disk.")
+    render_step_header(8, step_total, "Write run artifacts", "Write resolved config to disk.")
     timestamp = started_at.strftime("%Y%m%d_%H%M%S")
     run_id = f"{timestamp}-{uuid.uuid4().hex[:8]}"
     run_dir = create_run_dir(Path(output_base_dir), timestamp, run_slug)
-    with status_spinner("Writing run artifacts"):
+    with status_spinner("Writing resolved config"):
         try:
-            notes = ["Instances and trials are not executed in this round."]
+            notes = []
             if llm_mode == "mock":
                 notes.append("OpenRouter API key missing; LLM mode set to mock.")
 
+            planned_total_trials = min(k_max, max_calls)
             trial_budget = TrialBudget(k_max=k_max, scope="per_instance")
             llm_request_defaults = LLMRequestDefaults(
                 temperature=temperatures[0] if temp_kind == "fixed" else None,
@@ -154,6 +198,7 @@ def run_wizard() -> None:
                 heterogeneity_rung=heterogeneity_rung,
                 models=models,
                 llm=llm_config,
+                execution=execution_config,
                 temperature_policy=temperature_policy,
                 personas=persona_policy,
                 trial_budget=trial_budget,
@@ -168,44 +213,78 @@ def run_wizard() -> None:
 
             config_path = run_dir / "config.resolved.json"
             write_json(config_path, resolved)
-
-            ended_at = datetime.now(timezone.utc)
-            git_info = get_git_info(Path.cwd())
-            manifest = Manifest(
-                run_id=run_id,
-                started_at=started_at.isoformat(),
-                ended_at=ended_at.isoformat(),
-                git_sha=git_info.sha,
-                git_dirty=git_info.dirty,
-                python_version=platform.python_version(),
-                platform=platform_info(),
-                config_hash=config_hash,
-                semantic_config_hash=semantic_config_hash,
-                planned_call_budget=max_calls,
-                planned_call_budget_scope="per_instance",
-                planned_total_trials=planned_total_trials,
-                planned_total_trials_scope="per_instance",
-            )
-            manifest_path = run_dir / "manifest.json"
-            write_json(manifest_path, manifest.to_dict())
         except Exception as exc:
             cleanup_run_dir(run_dir)
             render_error(f"Failed to write run artifacts: {exc}")
             raise typer.Exit(code=1) from exc
 
-    render_success("Run artifacts written.")
+    render_success("Run config written.")
+    render_gap(after_prompt=False)
+
+    render_step_header(9, step_total, "Execute trials", "Run batched trials with convergence checks.")
+    execution_result = None
+    execution_error = None
+    try:
+        execution_result = asyncio.run(
+            execute_trials(run_dir=run_dir, resolved_config=resolved_config, instance=instance_record)
+        )
+    except Exception as exc:
+        execution_error = exc
+
+    ended_at = datetime.now(timezone.utc)
+    git_info = get_git_info(Path.cwd())
+    manifest = Manifest(
+        run_id=run_id,
+        started_at=started_at.isoformat(),
+        ended_at=ended_at.isoformat(),
+        git_sha=git_info.sha,
+        git_dirty=git_info.dirty,
+        python_version=platform.python_version(),
+        platform=platform_info(),
+        config_hash=config_hash,
+        semantic_config_hash=semantic_config_hash,
+        planned_call_budget=max_calls,
+        planned_call_budget_scope="per_instance",
+        planned_total_trials=planned_total_trials,
+        planned_total_trials_scope="per_instance",
+    )
+    manifest_path = run_dir / "manifest.json"
+    write_json(manifest_path, manifest.to_dict())
+
+    if execution_error is not None:
+        render_error(f"Execution failed: {execution_error}")
+        raise typer.Exit(code=1) from execution_error
 
     weight_sum = sum(atom.weight for atom in q_distribution.atoms)
+    ci_summary = "n/a"
+    if execution_result.top_ci_low is not None and execution_result.top_ci_high is not None:
+        ci_summary = f"[{execution_result.top_ci_low:.3f}, {execution_result.top_ci_high:.3f}]"
+
+    top_summary = "n/a"
+    if execution_result.top_label and execution_result.top_p is not None:
+        top_summary = f"{execution_result.top_label} ({execution_result.top_p:.3f}, CI {ci_summary})"
+
     summary = {
         "Run folder": str(run_dir),
+        "Instance": instance_id,
         "Rung": heterogeneity_rung,
         "Q(c) atoms": str(len(q_distribution.atoms)),
         "Weight sum": f"{weight_sum:.6f}",
         "Max trials (cap)": str(planned_total_trials),
-        "Max calls/instance": str(max_calls),
+        "Workers / batch": f"{worker_count} / {batch_size}",
+        "Trials executed": str(execution_result.stop_at_trials),
+        "Valid trials": str(execution_result.valid_trials),
+        "Batches": str(execution_result.batches_completed),
+        "Converged": "yes" if execution_result.converged else "no",
+        "Stop reason": execution_result.stop_reason,
+        "Top label": top_summary,
     }
     render_summary_table(summary)
-    render_info("Next step: execution is not implemented in this round.")
+    render_info(f"Artifacts written to {run_dir}")
+
+    if execution_result.stop_reason in {"parse_failure", "llm_error", "budget_exhausted"}:
+        render_error("Execution stopped due to errors. Review metrics.json for details.")
+        raise typer.Exit(code=1)
 
 
 @llm_app.command("dry-run")
@@ -310,6 +389,42 @@ def _prompt_csv(prompt: str, default: str) -> list[str]:
         if items:
             return items
         render_warning("Please provide at least one value.")
+
+
+def _prompt_text(prompt: str) -> str:
+    while True:
+        response = typer.prompt(prompt, default="", show_default=False)
+        if response.strip():
+            return response
+        render_warning("Prompt text is required.")
+
+
+def _prompt_bool(prompt: str, *, default: bool) -> bool:
+    default_value = "y" if default else "n"
+    while True:
+        response = typer.prompt(f"{prompt} (y/n)", default=default_value)
+        normalized = response.strip().lower()
+        if normalized in {"y", "yes"}:
+            return True
+        if normalized in {"n", "no"}:
+            return False
+        render_warning("Please enter y or n.")
+
+
+def _prompt_optional_label(prompt: str, labels: list[str]) -> str | None:
+    while True:
+        response = typer.prompt(prompt, default="", show_default=False)
+        cleaned = response.strip()
+        if not cleaned:
+            return None
+        if cleaned in labels:
+            return cleaned
+        render_warning(f"Gold label must be one of: {', '.join(labels)}.")
+
+
+def _build_instance_id(prompt_text: str) -> str:
+    digest = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
+    return f"instance_{digest[:10]}"
 
 
 def _prompt_int(prompt: str, default: int, min_value: int = 1) -> int:
