@@ -11,8 +11,8 @@ The key framing is explicit configuration sampling `Q(c)` and the induced decisi
 - Not a simulation of human populations or juries.
 
 ## Current status
-- `arbiter run` sets up runs for a prompt (instance) and writes run folder artifacts; execution/providers come next.
-- `config.resolved.json` separates `run` metadata from `semantic` config (including `trial_budget.k_max`).
+- `arbiter run` executes batched trials for a prompt (instance) and writes the full artifact bundle.
+- `config.resolved.json` separates `run` metadata from `semantic` config (including `trial_budget.k_max` and execution controls).
 - `runs/` is generated output and should remain untracked/ignored.
 
 ## Requirements
@@ -38,7 +38,7 @@ python -m pip install "git+https://github.com/darylkang/ensemble-reasoning.git@m
 ```
 
 ## Run
-`arbiter run` launches an interactive wizard that collects a prompt (instance) and creates a run folder under `./runs` with `manifest.json` and `config.resolved.json`.
+`arbiter run` launches an interactive wizard that collects a prompt (instance), executes trials (mock if no API key is set), and writes a run folder under `./runs` with `manifest.json`, `config.resolved.json`, `questions.jsonl`, `trials.jsonl`, `parsed.jsonl`, `aggregates.json`, and `metrics.json`.
 
 ```bash
 arbiter --help
