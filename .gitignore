@@ -5,6 +5,7 @@ __pycache__/
 
 # Arbiter artifacts
 runs/
+scratch/
 .DS_Store
 
 # C extensions
