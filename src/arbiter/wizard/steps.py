@@ -9,13 +9,15 @@ from typing import Any, Callable
 import typer
 
 from arbiter.config import default_canonical_config
+from arbiter.ui.console import get_console
 from arbiter.ui.render import (
     render_error,
     render_info,
-    render_notice,
+    render_selection_panel,
     render_step_header,
     render_summary_table,
     render_warning,
+    render_welcome_panel,
 )
 from arbiter.storage import write_json
 from arbiter.validation import load_and_validate_config
@@ -28,6 +30,7 @@ class Step:
     title: str
     description: str
     handler: Callable[[WizardState], None]
+    custom_surface: bool = False
 
 
 _REGISTRY: dict[str, Step] = {}
@@ -43,9 +46,12 @@ def get_step(step_id: str) -> Step:
 
 def run_step(step_id: str, state: WizardState) -> None:
     step = get_step(step_id)
-    index, total = state.step_index(step.step_id)
-    render_step_header(index, total, step.title, step.description)
+    console = get_console()
+    if step.step_id != "welcome" and not step.custom_surface:
+        index, total = state.step_index(step.step_id)
+        render_step_header(index, total, step.title, step.description)
     step.handler(state)
+    console.print()
 
 
 def _prompt_choice(prompt: str, choices: list[str], default: str) -> str:
@@ -110,6 +116,65 @@ def _prompt_yes_no(prompt: str, default: bool = False) -> bool:
         render_warning("Please enter y or n.")
 
 
+def _multi_select(
+    *,
+    step_label: str,
+    description: str,
+    options: list[str],
+    selected: set[str],
+    allow_empty: bool,
+) -> list[str]:
+    console = get_console()
+    if not console.is_terminal:
+        fallback = _prompt_csv(f"{step_label} (comma-separated)", ",".join(options), allow_empty=allow_empty)
+        return fallback
+
+    options = [option for option in options if option]
+    if not options:
+        options = []
+    while True:
+        render_selection_panel(
+            title=step_label,
+            description=description,
+            options=options,
+            selected=sorted(selected),
+            instructions="Toggle by number, A=all, N=none, C=confirm, +=add items",
+        )
+        response = typer.prompt("Selection", default="C")
+        normalized = response.strip()
+        if not normalized or normalized.lower() in {"c", "confirm"}:
+            if not allow_empty and not selected:
+                render_warning("Select at least one option.")
+                continue
+            return sorted(selected)
+        if normalized.lower() in {"a", "all"}:
+            selected = set(options)
+            continue
+        if normalized.lower() in {"n", "none"}:
+            selected = set()
+            continue
+        if normalized.startswith("+"):
+            additions = [item.strip() for item in normalized[1:].split(",") if item.strip()]
+            for item in additions:
+                if item not in options:
+                    options.append(item)
+            continue
+        parts = [part.strip() for part in normalized.split(",") if part.strip()]
+        toggled = False
+        for part in parts:
+            if part.isdigit():
+                idx = int(part)
+                if 1 <= idx <= len(options):
+                    value = options[idx - 1]
+                    if value in selected:
+                        selected.remove(value)
+                    else:
+                        selected.add(value)
+                    toggled = True
+        if not toggled:
+            render_warning("Enter numbers to toggle, or C to confirm.")
+
+
 def _load_config_file(path: Path, state: WizardState) -> dict[str, Any]:
     result = load_and_validate_config(
         path,
@@ -132,10 +197,26 @@ def _default_llm_mode(state: WizardState) -> str:
 
 
 def step_welcome(state: WizardState) -> None:
-    if not state.api_key_present:
-        render_notice("OpenRouter API key not found. Remote calls are disabled; using mock client.")
-    else:
-        render_info("OpenRouter API key detected. Remote calls are enabled.")
+    env_status = (
+        "remote enabled (OPENROUTER_API_KEY detected)"
+        if state.api_key_present
+        else "mock mode (OPENROUTER_API_KEY missing)"
+    )
+    config_exists = state.config_path.exists()
+    config_status = f"{state.config_path} found" if config_exists else f"{state.config_path} not found"
+    recommendation = "Load config" if config_exists else "Use guided wizard or create template"
+    render_welcome_panel(
+        title="Arbiter",
+        subtitle="Ensemble reasoning run setup",
+        environment=env_status,
+        config_status=config_status,
+        recommendation=recommendation,
+        action="Press Enter to begin",
+    )
+    try:
+        input()
+    except EOFError:
+        return
 
 
 def step_config_mode(state: WizardState) -> None:
@@ -220,30 +301,55 @@ def step_decode(state: WizardState) -> None:
 def step_personas(state: WizardState) -> None:
     q = state.input_config.setdefault("q", {})
     personas = q.setdefault("personas", {})
-    items = _prompt_csv("Persona ids (comma-separated, blank for none)", "", allow_empty=True)
-    persona_items = []
-    for item in items:
-        if item:
-            persona_items.append({"id": item, "weight": 1.0})
-    personas["items"] = persona_items
+    existing = [item.get("id") for item in personas.get("items", []) if item.get("id")]
+    options = existing[:]
+    selected = set(existing)
+    index, total = state.step_index("personas")
+    selection = _multi_select(
+        step_label=f"Step {index}/{total} · Persona mix",
+        description="Select personas to include.",
+        options=options,
+        selected=selected,
+        allow_empty=True,
+    )
+    personas["items"] = [{"id": value, "weight": 1.0} for value in selection]
     personas.setdefault("default_behavior", "neutral_if_empty")
 
 
 def step_models(state: WizardState) -> None:
     q = state.input_config.setdefault("q", {})
     models = q.setdefault("models", {})
-    items = _prompt_csv("Model slugs (comma-separated)", state.default_model)
-    model_items = []
-    for item in items:
-        if item:
-            model_items.append({"slug": item, "weight": 1.0})
-    models["items"] = model_items
+    existing = [item.get("slug") for item in models.get("items", []) if item.get("slug")]
+    if not existing:
+        existing = [state.default_model]
+    options = existing[:]
+    selected = set(existing)
+    index, total = state.step_index("models")
+    selection = _multi_select(
+        step_label=f"Step {index}/{total} · Model mix",
+        description="Select models to include.",
+        options=options,
+        selected=selected,
+        allow_empty=False,
+    )
+    models["items"] = [{"slug": value, "weight": 1.0} for value in selection]
 
 
 def step_protocol(state: WizardState) -> None:
     protocol = state.input_config.setdefault("protocol", {})
     protocol_type = _prompt_choice("Protocol", ["independent"], "independent")
     protocol["type"] = protocol_type
+
+
+def step_advanced_gate(state: WizardState) -> None:
+    response = typer.prompt(
+        "Use recommended defaults for execution + convergence? [Enter]=Yes / [A]=Advanced",
+        default="",
+        show_default=False,
+    )
+    use_advanced = response.strip().lower() in {"a", "advanced"}
+    state.use_advanced = use_advanced
+    state.compute_step_order()
 
 
 def step_advanced(state: WizardState) -> None:
@@ -272,7 +378,11 @@ def step_advanced(state: WizardState) -> None:
         "Patience batches", int(convergence.get("patience_batches", 2)), min_value=1
     )
 
-    clustering["method"] = _prompt_choice("Clustering method", ["hash_baseline", "leader"], clustering.get("method", "hash_baseline"))
+    clustering["method"] = _prompt_choice(
+        "Clustering method",
+        ["hash_baseline", "leader"],
+        clustering.get("method", "hash_baseline"),
+    )
     clustering["tau"] = _prompt_float("Clustering threshold (tau)", float(clustering.get("tau", 0.85)))
     clustering["embed_text"] = _prompt_choice(
         "Embed text", ["outcome", "outcome+rationale"], clustering.get("embed_text", "outcome+rationale")
@@ -324,9 +434,10 @@ register_step(Step("welcome", "Welcome", "Environment check and setup.", step_we
 register_step(Step("config_mode", "Config mode", "Load a config or run the guided wizard.", step_config_mode))
 register_step(Step("question", "Question", "Provide the question text.", step_question))
 register_step(Step("decode", "Decode params", "Configure decoding parameters.", step_decode))
-register_step(Step("personas", "Persona mix", "Configure persona mix.", step_personas))
-register_step(Step("models", "Model mix", "Configure model mix.", step_models))
+register_step(Step("personas", "Persona mix", "Configure persona mix.", step_personas, custom_surface=True))
+register_step(Step("models", "Model mix", "Configure model mix.", step_models, custom_surface=True))
 register_step(Step("protocol", "Protocol", "Select the protocol type.", step_protocol))
+register_step(Step("advanced_gate", "Defaults", "Use recommended defaults or customize.", step_advanced_gate))
 register_step(Step("advanced", "Advanced settings", "Execution, convergence, and clustering.", step_advanced))
 register_step(Step("review", "Review", "Confirm the configuration.", step_review))
 register_step(Step("run_setup", "Run setup", "Set run name and output path.", step_run_setup))

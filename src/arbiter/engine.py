@@ -19,7 +19,7 @@ from arbiter.llm.types import LLMRequest
 from arbiter.storage import append_jsonl, write_json
 from arbiter.ui.console import get_console
 from arbiter.ui.progress import build_execution_progress
-from arbiter.ui.render import render_info
+from arbiter.ui.render import render_batch_checkpoint, render_execution_header, render_info
 
 
 @dataclass(slots=True)
@@ -133,6 +133,14 @@ async def execute_trials(
     worker_counts = [0 for _ in range(worker_count)]
 
     client = create_client(llm_config.mode, default_routing=llm_config.routing_defaults)
+
+    _render_execution_header(
+        resolved_config=resolved_config,
+        question_text=question_text,
+        call_cap=call_cap,
+        worker_count=worker_count,
+        batch_size=batch_size,
+    )
 
     async def worker_loop(
         worker_id: int,
@@ -287,6 +295,7 @@ async def execute_trials(
                     new_mode_rate=new_mode_rate,
                 )
                 convergence_trace.append(entry)
+                render_batch_checkpoint(_checkpoint_row(entry, stop_reason))
 
                 if stop_reason is not None:
                     break
@@ -794,5 +803,78 @@ def _worker_description(worker_id: int, completed: int, atom: QAtom | None) -> s
     label = f"worker {worker_id + 1}"
     suffix = f"done {completed}"
     if atom:
-        return f"{label} · {atom.atom_id} · {atom.model} · {suffix}"
+        return f"{label} · running · {atom.atom_id} · {atom.model} · {suffix}"
     return f"{label} · idle · {suffix}"
+
+
+def _render_execution_header(
+    *,
+    resolved_config: ResolvedConfig,
+    question_text: str,
+    call_cap: int,
+    worker_count: int,
+    batch_size: int,
+) -> None:
+    semantic = resolved_config.semantic
+    protocol = semantic.protocol.type
+    models = ", ".join(semantic.models) if semantic.models else "n/a"
+    personas = ", ".join(semantic.personas.persona_ids) if semantic.personas.persona_ids else "none"
+    temperature = _format_temperature_policy(semantic.temperature_policy)
+    convergence = semantic.execution.convergence
+    epsilon_ci = (
+        f"{convergence.epsilon_ci_half_width:.3f}"
+        if convergence.epsilon_ci_half_width is not None
+        else "off"
+    )
+    summary = {
+        "Run ID": resolved_config.run.run_id,
+        "Started": resolved_config.run.started_at,
+        "Question": _truncate_text(question_text, 80),
+        "Protocol": protocol,
+        "Models": models,
+        "Personas": personas,
+        "Temperature": temperature,
+        "K_max": str(call_cap),
+        "Workers / batch": f"{worker_count} / {batch_size}",
+        "delta_js": f"{convergence.delta_js_threshold:.3f}",
+        "epsilon_new": f"{convergence.epsilon_new_threshold:.3f}",
+        "epsilon_ci": epsilon_ci,
+    }
+    render_execution_header(summary)
+
+
+def _format_temperature_policy(policy: Any) -> str:
+    kind = getattr(policy, "kind", "fixed")
+    values = list(getattr(policy, "temperatures", []) or [])
+    if kind == "range" and len(values) >= 2:
+        low, high = values[0], values[1]
+        return f"range {low:.2f}–{high:.2f}"
+    if kind == "list" and values:
+        return "list [" + ", ".join(f"{value:.2f}" for value in values) + "]"
+    if values:
+        return f"fixed {values[0]:.2f}"
+    return "fixed"
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    cleaned = " ".join(text.strip().split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1] + "…"
+
+
+def _checkpoint_row(entry: dict[str, Any], stop_reason: str | None) -> dict[str, str]:
+    modes = len(entry.get("counts_by_mode_id", {}) or {})
+    js_divergence = entry.get("js_divergence")
+    new_mode_rate = entry.get("new_mode_rate")
+    ci_half = entry.get("top_ci_half_width")
+    stop = "yes" if stop_reason is not None else "no"
+    return {
+        "batch": str(entry.get("batch_index")),
+        "trials": str(entry.get("trials_completed_total")),
+        "modes": str(modes),
+        "js": f"{js_divergence:.3f}" if js_divergence is not None else "n/a",
+        "new": f"{new_mode_rate:.3f}" if new_mode_rate is not None else "n/a",
+        "ci_hw": f"{ci_half:.3f}" if ci_half is not None else "n/a",
+        "stop": stop,
+    }

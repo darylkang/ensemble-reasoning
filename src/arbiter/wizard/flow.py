@@ -45,7 +45,11 @@ def _next_step(state: WizardState, step_id: str) -> str | None:
     if step_id == "models":
         return "protocol"
     if step_id == "protocol":
-        return "advanced"
+        return "advanced_gate"
+    if step_id == "advanced_gate":
+        if state.use_advanced:
+            return "advanced"
+        return "review"
     if step_id == "advanced":
         return "review"
     if step_id == "review":

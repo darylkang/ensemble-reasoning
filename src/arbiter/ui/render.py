@@ -19,7 +19,42 @@ def render_banner(title: str, subtitle: str) -> None:
     panel = Panel(
         Group(Text(title, style="title"), Text(subtitle, style="subtitle")),
         box=box.ROUNDED,
-        border_style="grey37",
+        border_style="border",
+        padding=(0, 2),
+        expand=True,
+    )
+    console.print(panel)
+    console.print()
+
+
+def render_welcome_panel(
+    *,
+    title: str,
+    subtitle: str,
+    environment: str,
+    config_status: str,
+    recommendation: str,
+    action: str,
+) -> None:
+    console = get_console()
+    table = Table(show_header=False, box=None, pad_edge=False)
+    table.add_column(style="label", no_wrap=True, justify="right")
+    table.add_column(style="value")
+    table.add_row("Environment", environment)
+    table.add_row("Config", config_status)
+    table.add_row("Recommended", recommendation)
+
+    panel = Panel(
+        Group(
+            Text(title, style="title"),
+            Text(subtitle, style="subtitle"),
+            Text(""),
+            table,
+            Text(""),
+            Text(action, style="dim"),
+        ),
+        box=box.ROUNDED,
+        border_style="border",
         padding=(0, 2),
         expand=True,
     )
@@ -36,7 +71,7 @@ def render_step_header(step_idx: int, step_total: int, title: str, description: 
     panel = Panel(
         Group(*content),
         box=box.ROUNDED,
-        border_style="grey37",
+        border_style="border",
         padding=(0, 2),
         expand=True,
     )
@@ -68,7 +103,7 @@ def render_notice(text: str) -> None:
     panel = Panel(
         Text(text, style="warning"),
         box=box.ROUNDED,
-        border_style="warning",
+        border_style="border",
         padding=(0, 2),
         expand=True,
     )
@@ -114,7 +149,7 @@ def render_summary_table(rows: Mapping[str, str] | Sequence[tuple[str, str]], ti
         table,
         title=Text(title, style="step"),
         title_align="left",
-        border_style="grey37",
+        border_style="border",
         box=box.ROUNDED,
         padding=(0, 2),
         expand=True,
@@ -131,8 +166,110 @@ def render_validation_panel(title: str, issues: Sequence[str], *, style: str) ->
     panel = Panel(
         Group(*lines),
         box=box.ROUNDED,
-        border_style=style,
+        border_style="border",
         padding=(0, 2),
         expand=True,
     )
+    console.print(panel)
+
+
+def render_selection_panel(
+    *,
+    title: str,
+    description: str,
+    options: Sequence[str],
+    selected: Sequence[str],
+    instructions: str,
+) -> None:
+    console = get_console()
+    header = Text(title, style="step")
+    desc = Text(description, style="subtitle")
+    rows = []
+    selected_set = set(selected)
+    for index, option in enumerate(options, start=1):
+        marker = "[x]" if option in selected_set else "[ ]"
+        rows.append(Text(f"{index:>2} {marker} {option}", style="value"))
+    body = Group(header, desc, Text(""), *rows, Text(""), Text(instructions, style="dim"))
+    panel = Panel(
+        body,
+        box=box.ROUNDED,
+        border_style="border",
+        padding=(0, 2),
+        expand=True,
+    )
+    console.print(panel)
+
+
+def render_execution_header(summary: Mapping[str, str]) -> None:
+    console = get_console()
+    table = Table(show_header=False, box=None, pad_edge=False)
+    table.add_column(style="label", no_wrap=True, justify="right")
+    table.add_column(style="value")
+    for key, value in summary.items():
+        table.add_row(Text(str(key), style="label"), Text(str(value), style="value"))
+    panel = Panel(
+        Group(Text("Execution", style="step"), Text(""), table),
+        box=box.ROUNDED,
+        border_style="border",
+        padding=(0, 2),
+        expand=True,
+    )
+    console.print(panel)
+    console.print()
+
+
+def render_batch_checkpoint(row: Mapping[str, str]) -> None:
+    console = get_console()
+    table = Table(show_header=True, box=box.ROUNDED, pad_edge=False)
+    for key in row.keys():
+        table.add_column(str(key), style="label", no_wrap=True)
+    table.add_row(*[str(value) for value in row.values()])
+    panel = Panel(
+        table,
+        title=Text("Batch checkpoint", style="step"),
+        title_align="left",
+        border_style="border",
+        padding=(0, 2),
+        expand=True,
+    )
+    console.print(panel)
+
+
+def render_receipt_panel(
+    *,
+    title: str,
+    summary: Mapping[str, str],
+    top_modes: Sequence[tuple[str, float, str]],
+    artifact_path: str,
+) -> None:
+    console = get_console()
+    table = Table(show_header=False, box=None, pad_edge=False)
+    table.add_column(style="label", no_wrap=True, justify="right")
+    table.add_column(style="value")
+    for key, value in summary.items():
+        table.add_row(Text(str(key), style="label"), Text(str(value), style="value"))
+    mode_lines = []
+    if top_modes:
+        for mode_id, share, exemplar in top_modes:
+            mode_lines.append(Text(f"{mode_id} · {share:.3f} · {exemplar}", style="value"))
+    else:
+        mode_lines.append(Text("n/a", style="dim"))
+
+    panel = Panel(
+        Group(
+            Text(title, style="step"),
+            Text(""),
+            table,
+            Text(""),
+            Text("Top modes", style="subtitle"),
+            *mode_lines,
+            Text(""),
+            Text(f"Artifacts: {artifact_path}", style="dim"),
+        ),
+        box=box.ROUNDED,
+        border_style="border",
+        padding=(0, 2),
+        expand=True,
+    )
+    console.print()
     console.print(panel)

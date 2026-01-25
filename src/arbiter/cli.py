@@ -40,9 +40,9 @@ from arbiter.ui.render import (
     render_info,
     render_step_header,
     render_success,
-    render_summary_table,
     render_warning,
     render_validation_panel,
+    render_receipt_panel,
 )
 from arbiter.wizard import WizardState, run_wizard as run_wizard_flow
 from arbiter.validation import load_and_validate_config
@@ -66,8 +66,6 @@ def root(ctx: typer.Context) -> None:
 @app.command("run")
 def run_wizard() -> None:
     """Interactive wizard to create a run folder and resolved config."""
-    render_banner("arbiter", "Ensemble reasoning run setup")
-
     started_at = datetime.now(timezone.utc)
     default_model = os.getenv("ARBITER_DEFAULT_MODEL", "openai/gpt-5")
     api_key_present = bool(os.getenv("OPENROUTER_API_KEY"))
@@ -226,22 +224,21 @@ def run_wizard() -> None:
     if execution_result.top_mode_id and execution_result.top_p is not None:
         top_summary = f"{execution_result.top_mode_id} ({execution_result.top_p:.3f}, CI {ci_summary})"
 
+    top_modes = _collect_top_modes(run_dir, top_n=3)
     summary = {
-        "Run folder": str(run_dir),
-        "Question": question_id,
-        "Rung": heterogeneity_rung,
-        "Q(c) atoms": str(len(q_distribution.atoms)),
-        "Weight sum": f"{weight_sum:.6f}",
-        "Max trials (cap)": str(planned_total_trials),
-        "Workers / batch": f"{worker_count} / {batch_size}",
-        "Trials executed": str(execution_result.stop_at_trials),
+        "Stop reason": execution_result.stop_reason,
+        "Trials executed": f"{execution_result.stop_at_trials} / {planned_total_trials}",
         "Valid trials": str(execution_result.valid_trials),
         "Batches": str(execution_result.batches_completed),
         "Converged": "yes" if execution_result.converged else "no",
-        "Stop reason": execution_result.stop_reason,
         "Top mode": top_summary,
     }
-    render_summary_table(summary)
+    render_receipt_panel(
+        title="Receipt",
+        summary=summary,
+        top_modes=top_modes,
+        artifact_path=str(run_dir),
+    )
     render_info(f"Artifacts written to {run_dir}")
 
     if execution_result.stop_reason in {"parse_failure", "llm_error", "budget_exhausted"}:
@@ -447,6 +444,51 @@ def _build_llm_config(
         extra_body_defaults=dict(extra_body_defaults),
     )
     return llm_config, mode_label, notes
+
+
+def _collect_top_modes(run_dir: Path, top_n: int = 3) -> list[tuple[str, float, str]]:
+    aggregates_path = run_dir / "aggregates.json"
+    parsed_path = run_dir / "parsed.jsonl"
+    if not aggregates_path.exists() or not parsed_path.exists():
+        return []
+    try:
+        aggregates = json.loads(aggregates_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    distribution = aggregates.get("distribution_by_mode_id") or {}
+    if not isinstance(distribution, dict) or not distribution:
+        return []
+
+    sorted_modes = sorted(distribution.items(), key=lambda item: item[1], reverse=True)[:top_n]
+    mode_ids = [mode_id for mode_id, _ in sorted_modes]
+    exemplars: dict[str, str] = {}
+    try:
+        for line in parsed_path.read_text(encoding="utf-8").splitlines():
+            if len(exemplars) == len(mode_ids):
+                break
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            mode_id = payload.get("mode_id")
+            outcome = payload.get("outcome")
+            if mode_id in mode_ids and mode_id not in exemplars and isinstance(outcome, str):
+                exemplars[mode_id] = _truncate_text(outcome, 60)
+    except OSError:
+        return []
+
+    result: list[tuple[str, float, str]] = []
+    for mode_id, share in sorted_modes:
+        exemplar = exemplars.get(mode_id, "n/a")
+        result.append((mode_id, float(share), exemplar))
+    return result
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    cleaned = " ".join(text.strip().split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1] + "…"
 
 
 def main() -> None:

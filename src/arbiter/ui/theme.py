@@ -6,16 +6,18 @@ from rich.theme import Theme
 
 THEME = Theme(
     {
-        "accent": "sky_blue3",
-        "title": "bold sky_blue3",
-        "subtitle": "dim",
-        "step": "bold sky_blue3",
-        "info": "dim",
-        "warning": "red3",
+        "accent": "gold3",
+        "title": "bold wheat1",
+        "subtitle": "grey70",
+        "dim": "grey50",
+        "step": "bold gold3",
+        "info": "grey70",
+        "warning": "orange3",
         "success": "green3",
-        "error": "bold red3",
-        "label": "dim",
+        "error": "red3",
+        "label": "grey70",
         "value": "white",
-        "path": "sky_blue3",
+        "path": "gold3",
+        "border": "grey37",
     }
 )

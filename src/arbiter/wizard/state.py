@@ -18,6 +18,7 @@ class WizardState:
     save_config: bool = False
     run_name: str = "auto"
     output_base_dir: Path = field(default_factory=lambda: Path("./runs"))
+    use_advanced: bool = False
 
     def compute_step_order(self) -> None:
         steps = ["welcome", "config_mode"]
@@ -30,11 +31,12 @@ class WizardState:
                     "personas",
                     "models",
                     "protocol",
-                    "advanced",
-                    "review",
-                    "run_setup",
+                    "advanced_gate",
                 ]
             )
+            if self.use_advanced:
+                steps.append("advanced")
+            steps.extend(["review", "run_setup"])
         else:
             if missing_question:
                 steps.append("question")
