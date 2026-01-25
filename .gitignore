@@ -7,6 +7,8 @@ __pycache__/
 runs/
 scratch/
 .DS_Store
+__MACOSX/
+arbiter.config.json
 
 # C extensions
 *.so
