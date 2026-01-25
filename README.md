@@ -22,7 +22,13 @@ The key framing is explicit configuration sampling `Q(c)` and the induced distri
 
 ## Configuration
 Copy `.env.example` to `.env`, fill in values, and keep `.env` untracked. Arbiter reads these environment variables at runtime.
-You can optionally create `arbiter.config.json` in the working directory; the wizard will load it and only prompt for missing fields.
+Copy `arbiter.config.example.json` to `arbiter.config.json` to start from a canonical template; the wizard will load it and only prompt for missing fields.
+
+Validate a config file before running:
+
+```bash
+arbiter config validate
+```
 
 ## Install
 From a local clone:

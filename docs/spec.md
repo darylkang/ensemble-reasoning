@@ -57,6 +57,7 @@ Top-level structure:
 - `llm`: `{mode, model, request_defaults, routing_defaults, extra_body_defaults}`.
 
 Each run writes a `config.input.json` copy of the canonical config used to drive that run.
+The repo includes a tracked template (`arbiter.config.example.json`) that can be copied to `arbiter.config.json`.
 
 ## Resolved Config Structure
 - `config.resolved.json` must separate `run` metadata from `semantic` configuration.
@@ -126,6 +127,8 @@ The wizard is a decision tree:
 - Step 6: Protocol `π` (independent vs interaction/debate).
 - Step 7: Advanced settings (execution + convergence + clustering): `K_max`, workers `W`, batch size `B`, retry policy/backoff, embedding model `f`, clustering method and threshold `τ`, convergence criteria `δ`, `ε_new`, optional `ε_CI`, patience.
 - Review card -> Phase 2 execute -> Phase 3 receipt.
+
+Use `arbiter config validate` to validate a config file without executing a run.
 
 ## Artifact Bundle Contract (Run Folder)
 Each run writes a self-contained directory containing:
