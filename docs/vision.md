@@ -1,22 +1,24 @@
 # Vision
 
 ## Purpose
-Arbiter is a research harness supporting an arXiv-oriented study. It prioritizes reproducibility and auditability over productization and is not a service. UX quality is valued, but it is not treated as a scientific contribution.
+Arbiter is a research harness for an arXiv-oriented study. It prioritizes reproducibility and auditability over productization and is not a service. UX quality is valued but not treated as a scientific contribution.
 
 ## Thesis
-A single answer is one sample. Reasoning is modeled as an induced decision distribution under an explicit configuration distribution `Q(c)`.
+A single answer is one sample. Reasoning is modeled as an induced landscape under an explicit configuration distribution `Q(c)`.
 
-The estimand is the induced distribution `P_Q(y|x)` where `x` is the instance. The empirical estimate from finite trials is `P̂_Q(y|x)`. Changing `Q(c)` changes the estimand, so `Q(c)` must be explicit.
+The estimand is the induced distribution `P_Q(y|x)` where `x` is the question. The empirical estimate from finite trials is `P̂^Q(y|x)`. Changing `Q(c)` changes the estimand, so `Q(c)` must be explicit.
 
 ## Formal Framing
 - Configuration tuple: `c = (m, d, p, π)` where `m` is model/provider, `d` is decoding parameters, `p` is prompt/persona framing, and `π` is protocol.
-- Label set: `Y`, with decision `y ∈ Y`.
-- The instance text is the prompt shown to the model.
-- Each trial must output a normalized decision `y`; rationales are optional and may be free-form.
+- Question: `x` (the question text shown to the model).
+- Trial output object: `o`, a structured free-form output.
+- Embedding: `z = f(o)`.
+- Mode assignment: `y := cluster(z)`.
+- Each trial must emit a parseable output object `o`; modes emerge from embedding and clustering rather than a predefined label set.
 
 ## Two Uncertainties
-- Decision uncertainty: dispersion of `P̂_Q(·|x)` (entropy, margin, or disagreement).
-- Estimation uncertainty (meta-uncertainty): uncertainty in `P̂_Q` due to finite trials, expressed through per-instance confidence intervals and convergence diagnostics.
+- Decision uncertainty: dispersion of `P̂^Q(·|x)` over discovered modes (entropy, margin, or disagreement).
+- Estimation uncertainty (meta-uncertainty): uncertainty in `P̂^Q` due to finite trials, expressed through per-question confidence intervals and convergence diagnostics.
 
 Convergence refers to estimate stability, not correctness.
 

@@ -1,9 +1,9 @@
 # Arbiter
 Ensemble Reasoning Research Harness
 
-Arbiter (repo: ensemble-reasoning) is a research harness for running ensemble reasoning experiments with language models. It treats reasoning outputs as a distribution over decisions and rationales, and emphasizes reproducibility, auditability, and statistical rigor over product features.
+Arbiter (repo: ensemble-reasoning) is a research harness for mapping the reasoning landscape of language models. It treats model outputs as structured objects, embeds them, and clusters them to discover emergent modes rather than enforcing a predefined label set.
 
-The key framing is explicit configuration sampling `Q(c)` and the induced decision distribution `P_Q(y|x)`, estimated by `P̂_Q(y|x)`. We prioritize reliability signals, decision stability, and meta-uncertainty (confidence intervals, convergence) rather than accuracy alone.
+The key framing is explicit configuration sampling `Q(c)` and the induced distribution over discovered modes `P_Q(y|x)`, estimated by `P̂^Q(y|x)`. We prioritize reliability signals, decision stability, and meta-uncertainty (confidence intervals, convergence) rather than accuracy alone.
 
 ## Non-goals
 - Not a production system or hosted service.
@@ -11,13 +11,14 @@ The key framing is explicit configuration sampling `Q(c)` and the induced decisi
 - Not a simulation of human populations or juries.
 
 ## Current status
-- `arbiter run` executes batched trials for a prompt (instance) and writes the full artifact bundle.
-- `config.resolved.json` separates `run` metadata from `semantic` config (including `trial_budget.k_max` and execution controls).
+- `arbiter run` executes single-question runs with OpenRouter (or mock when no key is present).
+- The artifact bundle and clustering outputs are evolving toward the full contract in `docs/spec.md`.
 - `runs/` is generated output and should remain untracked/ignored.
 
 ## Requirements
 - Python >= 3.14
-- `OPENROUTER_API_KEY` is required for remote OpenRouter calls; when absent, runs record `llm.mode = mock`.
+- OpenRouter is the only network provider; models are selected by OpenRouter slug.
+- Measurement mode defaults to no fallbacks (`allow_fallbacks=false`) unless explicitly overridden.
 
 ## Configuration
 Copy `.env.example` to `.env`, fill in values, and keep `.env` untracked. Arbiter reads these environment variables at runtime.
@@ -38,7 +39,19 @@ python -m pip install "git+https://github.com/darylkang/ensemble-reasoning.git@m
 ```
 
 ## Run
-`arbiter run` launches an interactive wizard that collects a prompt (instance), executes trials (mock if no API key is set), and writes a run folder under `./runs` with `manifest.json`, `config.resolved.json`, `questions.jsonl`, `trials.jsonl`, `parsed.jsonl`, `aggregates.json`, and `metrics.json`.
+`arbiter run` launches a decision-tree wizard:
+
+1) Welcome + environment check (OpenRouter key, remote vs mock)
+2) Config mode selection (load `Q(c)` JSON or guided build)
+3) Question text `x` (multi-line or file path)
+4) Decode params `d` (fixed or ranged temperature, defaults/extras)
+5) Persona mix `p`
+6) Model mix `m` (OpenRouter slugs, default from `ARBITER_DEFAULT_MODEL`)
+7) Protocol `π` (independent vs interaction/debate)
+8) Advanced settings (execution + convergence + clustering)
+9) Review -> Execute -> Receipt
+
+Runs write a folder under `./runs` following the artifact contract in `docs/spec.md`, including `manifest.json`, `config.resolved.json`, `question.json`, `trials.jsonl`, `parsed.jsonl`, `aggregates.json`, `metrics.json`, and clustering outputs.
 
 ```bash
 arbiter --help

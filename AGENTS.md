@@ -5,6 +5,7 @@ This file is authoritative for Codex behavior in this repo.
 ## Project Principles
 - This repository is research tooling; avoid overengineering.
 - Prefer clear, auditable scaffolding over complex implementation.
+- Use \"question\" as the canonical unit in docs and UI; avoid \"instance\" except when referencing notation.
 
 ## Commit Discipline
 - Conventional Commits are REQUIRED.
