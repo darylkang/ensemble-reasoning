@@ -98,12 +98,16 @@ class LLMConfig:
 
 @dataclass(frozen=True)
 class ConvergenceConfig:
-    epsilon_ci_half_width: float
+    delta_js_threshold: float
+    epsilon_new_threshold: float
+    epsilon_ci_half_width: float | None
     min_trials: int
     patience_batches: int
 
     def to_dict(self) -> dict:
         return {
+            "delta_js_threshold": self.delta_js_threshold,
+            "epsilon_new_threshold": self.epsilon_new_threshold,
             "epsilon_ci_half_width": self.epsilon_ci_half_width,
             "min_trials": self.min_trials,
             "patience_batches": self.patience_batches,

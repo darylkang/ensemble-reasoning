@@ -80,20 +80,13 @@ def run_wizard() -> None:
     run_slug = slugify_run_name(run_name)
     render_gap(after_prompt=True)
 
-    render_step_header(2, step_total, "Instance and decision contract", "Provide the prompt and allowed labels.")
-    prompt_text = _prompt_text("Prompt text (single line; use \\n for newlines)")
-    labels = _prompt_csv("Decision labels (comma-separated)", "YES,NO")
-    enable_abstain = _prompt_bool("Enable ABSTAIN?", default=False)
-    if enable_abstain and "ABSTAIN" not in labels:
-        labels.append("ABSTAIN")
-    gold_label = _prompt_optional_label("Gold label (optional)", labels)
-    instance_id = _build_instance_id(prompt_text)
-    instance_record = {
-        "instance_id": instance_id,
-        "prompt": prompt_text,
-        "labels": labels,
-        "gold": gold_label,
-        "metadata": {"abstain_enabled": enable_abstain},
+    render_step_header(2, step_total, "Question", "Provide the question text.")
+    question_text = _prompt_text("Question text (single line; use \\n for newlines)")
+    question_id = _build_question_id(question_text)
+    question_record = {
+        "question_id": question_id,
+        "question_text": question_text,
+        "metadata": {},
     }
     render_gap(after_prompt=True)
 
@@ -119,13 +112,18 @@ def run_wizard() -> None:
     render_step_header(5, step_total, "Execution controls", "Set concurrency and convergence thresholds.")
     worker_count = _prompt_int("Worker concurrency (W)", 8, min_value=1)
     batch_size = _prompt_int("Batch size (B)", worker_count, min_value=1)
-    epsilon = _prompt_float("CI half-width threshold (epsilon)", 0.05)
-    min_trials_default = max(batch_size, 16)
+    delta_js = _prompt_float("JS divergence threshold (delta_js)", 0.02)
+    epsilon_new = _prompt_float("New mode rate threshold (epsilon_new)", 0.01)
+    epsilon_ci = _prompt_float("Top-mode CI half-width threshold (epsilon_ci)", 0.05)
+    epsilon_ci = None if epsilon_ci <= 0 else epsilon_ci
+    min_trials_default = max(64, batch_size)
     min_trials = _prompt_int("Minimum valid trials before early stop", min_trials_default, min_value=1)
     patience_batches = _prompt_int("Patience batches", 2, min_value=1)
     max_retries = _prompt_int("Max parse retries per trial", 2, min_value=0)
     convergence_config = ConvergenceConfig(
-        epsilon_ci_half_width=epsilon,
+        delta_js_threshold=delta_js,
+        epsilon_new_threshold=epsilon_new,
+        epsilon_ci_half_width=epsilon_ci,
         min_trials=min_trials,
         patience_batches=patience_batches,
     )
@@ -144,13 +142,13 @@ def run_wizard() -> None:
     render_gap(after_prompt=False)
 
     planned_total_trials = k_max
-    render_step_header(7, step_total, "Budget and output", "Set a per-instance call guardrail and output path.")
+    render_step_header(7, step_total, "Budget and output", "Set a per-question call guardrail and output path.")
     max_calls = _prompt_int(
-        "Max model calls (per instance)",
+        "Max model calls (per question)",
         planned_total_trials,
         min_value=1,
     )
-    budget_guardrail = BudgetGuardrail(max_calls=max_calls, scope="per_instance")
+    budget_guardrail = BudgetGuardrail(max_calls=max_calls, scope="per_question")
 
     output_base_dir_input = typer.prompt("Output base directory", default="./runs")
     output_base_dir = str(Path(output_base_dir_input.strip() or "./runs").expanduser())
@@ -167,7 +165,7 @@ def run_wizard() -> None:
                 notes.append("OpenRouter API key missing; LLM mode set to mock.")
 
             planned_total_trials = min(k_max, max_calls)
-            trial_budget = TrialBudget(k_max=k_max, scope="per_instance")
+            trial_budget = TrialBudget(k_max=k_max, scope="per_question")
             llm_request_defaults = LLMRequestDefaults(
                 temperature=temperatures[0] if temp_kind == "fixed" else None,
                 top_p=None,
@@ -188,7 +186,7 @@ def run_wizard() -> None:
                 extra_body_defaults={},
             )
             resolved_config = ResolvedConfig.build_from_wizard_inputs(
-                schema_version="0.5",
+                schema_version="0.6",
                 run_name=run_name,
                 run_slug=run_slug,
                 run_id=run_id,
@@ -226,7 +224,7 @@ def run_wizard() -> None:
     execution_error = None
     try:
         execution_result = asyncio.run(
-            execute_trials(run_dir=run_dir, resolved_config=resolved_config, instance=instance_record)
+            execute_trials(run_dir=run_dir, resolved_config=resolved_config, question=question_record)
         )
     except Exception as exc:
         execution_error = exc
@@ -244,9 +242,9 @@ def run_wizard() -> None:
         config_hash=config_hash,
         semantic_config_hash=semantic_config_hash,
         planned_call_budget=max_calls,
-        planned_call_budget_scope="per_instance",
+        planned_call_budget_scope="per_question",
         planned_total_trials=planned_total_trials,
-        planned_total_trials_scope="per_instance",
+        planned_total_trials_scope="per_question",
     )
     manifest_path = run_dir / "manifest.json"
     write_json(manifest_path, manifest.to_dict())
@@ -261,12 +259,12 @@ def run_wizard() -> None:
         ci_summary = f"[{execution_result.top_ci_low:.3f}, {execution_result.top_ci_high:.3f}]"
 
     top_summary = "n/a"
-    if execution_result.top_label and execution_result.top_p is not None:
-        top_summary = f"{execution_result.top_label} ({execution_result.top_p:.3f}, CI {ci_summary})"
+    if execution_result.top_mode_id and execution_result.top_p is not None:
+        top_summary = f"{execution_result.top_mode_id} ({execution_result.top_p:.3f}, CI {ci_summary})"
 
     summary = {
         "Run folder": str(run_dir),
-        "Instance": instance_id,
+        "Question": question_id,
         "Rung": heterogeneity_rung,
         "Q(c) atoms": str(len(q_distribution.atoms)),
         "Weight sum": f"{weight_sum:.6f}",
@@ -277,7 +275,7 @@ def run_wizard() -> None:
         "Batches": str(execution_result.batches_completed),
         "Converged": "yes" if execution_result.converged else "no",
         "Stop reason": execution_result.stop_reason,
-        "Top label": top_summary,
+        "Top mode": top_summary,
     }
     render_summary_table(summary)
     render_info(f"Artifacts written to {run_dir}")
@@ -399,32 +397,9 @@ def _prompt_text(prompt: str) -> str:
         render_warning("Prompt text is required.")
 
 
-def _prompt_bool(prompt: str, *, default: bool) -> bool:
-    default_value = "y" if default else "n"
-    while True:
-        response = typer.prompt(f"{prompt} (y/n)", default=default_value)
-        normalized = response.strip().lower()
-        if normalized in {"y", "yes"}:
-            return True
-        if normalized in {"n", "no"}:
-            return False
-        render_warning("Please enter y or n.")
-
-
-def _prompt_optional_label(prompt: str, labels: list[str]) -> str | None:
-    while True:
-        response = typer.prompt(prompt, default="", show_default=False)
-        cleaned = response.strip()
-        if not cleaned:
-            return None
-        if cleaned in labels:
-            return cleaned
-        render_warning(f"Gold label must be one of: {', '.join(labels)}.")
-
-
-def _build_instance_id(prompt_text: str) -> str:
-    digest = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
-    return f"instance_{digest[:10]}"
+def _build_question_id(question_text: str) -> str:
+    digest = hashlib.sha256(question_text.encode("utf-8")).hexdigest()
+    return f"question_{digest[:10]}"
 
 
 def _prompt_int(prompt: str, default: int, min_value: int = 1) -> int:

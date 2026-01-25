@@ -44,7 +44,8 @@ class TrialOutcome:
     trial_record: dict[str, Any]
     parsed_record: dict[str, Any]
     parse_valid: bool
-    decision: str | None
+    mode_id: str | None
+    embedded_text: str | None
     retry_messages: list[dict[str, Any]] | None
     retries_used: int
     atom: QAtom
@@ -59,7 +60,7 @@ class ExecutionResult:
     parse_error_count: int
     batches_completed: int
     converged: bool
-    top_label: str | None
+    top_mode_id: str | None
     top_p: float | None
     top_ci_low: float | None
     top_ci_high: float | None
@@ -73,24 +74,21 @@ async def execute_trials(
     *,
     run_dir: Path,
     resolved_config: ResolvedConfig,
-    instance: dict[str, Any],
+    question: dict[str, Any],
 ) -> ExecutionResult:
-    prompt_text = str(instance.get("prompt", ""))
-    labels = [str(label) for label in instance.get("labels", [])]
-    if not prompt_text.strip():
-        raise ValueError("Instance prompt text is required for execution.")
-    if not labels:
-        raise ValueError("Instance labels are required for execution.")
-    instance_id = str(instance.get("instance_id", "instance"))
-    prompt_hash = _hash_text(prompt_text)
+    question_text = str(question.get("question_text", ""))
+    if not question_text.strip():
+        raise ValueError("Question text is required for execution.")
+    question_id = str(question.get("question_id", "question"))
+    question_hash = _hash_text(question_text)
 
-    questions_path = run_dir / "questions.jsonl"
+    question_path = run_dir / "question.json"
     trials_path = run_dir / "trials.jsonl"
     parsed_path = run_dir / "parsed.jsonl"
     aggregates_path = run_dir / "aggregates.json"
     metrics_path = run_dir / "metrics.json"
 
-    append_jsonl(questions_path, instance)
+    write_json(question_path, question)
 
     semantic = resolved_config.semantic
     execution = semantic.execution
@@ -106,7 +104,8 @@ async def execute_trials(
     rng_seed = random.randrange(2**32)
     rng = random.Random(rng_seed)
 
-    counts_by_label = {label: 0 for label in labels}
+    counts_by_mode: dict[str, int] = {}
+    seen_modes: set[str] = set()
     total_trials = 0
     valid_trials = 0
     parse_error_count = 0
@@ -119,6 +118,7 @@ async def execute_trials(
     trial_counter = 0
     consecutive_converged = 0
     batches_completed = 0
+    prev_distribution: dict[str, float] | None = None
 
     console = get_console()
     use_live = console.is_terminal
@@ -149,9 +149,8 @@ async def execute_trials(
                 item=item,
                 worker_id=worker_id,
                 run_id=resolved_config.run.run_id,
-                instance_id=instance_id,
-                prompt_hash=prompt_hash,
-                labels=labels,
+                question_id=question_id,
+                question_hash=question_hash,
                 llm_config=llm_config,
                 client=client,
             )
@@ -168,7 +167,7 @@ async def execute_trials(
     async def run_loop() -> None:
         nonlocal total_trials, valid_trials, parse_error_count, llm_error_count
         nonlocal stop_reason, stop_error, batches_completed, consecutive_converged
-        nonlocal trial_counter
+        nonlocal trial_counter, prev_distribution
 
         queue: asyncio.Queue[WorkItem | None] = asyncio.Queue()
         results: asyncio.Queue[TrialOutcome] = asyncio.Queue()
@@ -197,7 +196,7 @@ async def execute_trials(
                         continue
                     trial_counter += 1
                     atom = _sample_atom(rng, semantic.q_distribution.atoms)
-                    messages = build_messages(prompt_text, labels, atom.persona_id)
+                    messages = build_messages(question_text, atom.persona_id)
                     batch_items.append(
                         WorkItem(
                             trial_id=f"trial_{trial_counter:06d}",
@@ -219,9 +218,9 @@ async def execute_trials(
                     append_jsonl(trials_path, outcome.trial_record)
                     append_jsonl(parsed_path, outcome.parsed_record)
 
-                    if outcome.parse_valid and outcome.decision:
+                    if outcome.parse_valid and outcome.mode_id:
                         valid_trials += 1
-                        counts_by_label[outcome.decision] += 1
+                        counts_by_mode[outcome.mode_id] = counts_by_mode.get(outcome.mode_id, 0) + 1
                     else:
                         parse_error_count += 1
 
@@ -254,28 +253,48 @@ async def execute_trials(
                         f"{valid_trials} valid."
                     )
 
+                new_mode_rate, seen_modes_after = _new_mode_rate(batch_results, seen_modes, len(batch_items))
+                seen_modes.clear()
+                seen_modes.update(seen_modes_after)
+
+                distribution = _distribution(counts_by_mode, valid_trials)
+                js_divergence = _js_divergence(prev_distribution, distribution)
+                top_mode_id = _top_mode_id(counts_by_mode)
+                top_p = distribution.get(top_mode_id) if top_mode_id else None
+                top_ci = _wilson_ci(counts_by_mode.get(top_mode_id, 0), valid_trials) if top_mode_id else None
                 entry = _convergence_entry(
                     batch_index=batch_index,
                     total_trials=total_trials,
                     valid_trials=valid_trials,
-                    counts_by_label=counts_by_label,
-                    labels=labels,
-                    epsilon=convergence.epsilon_ci_half_width,
-                    min_trials=convergence.min_trials,
+                    counts_by_mode=counts_by_mode,
+                    distribution_by_mode=distribution,
+                    top_mode_id=top_mode_id,
+                    top_p=top_p,
+                    top_ci=top_ci,
+                    js_divergence=js_divergence,
+                    new_mode_rate=new_mode_rate,
                 )
                 convergence_trace.append(entry)
 
                 if stop_reason is not None:
                     break
 
-                if entry["converged_candidate"]:
+                converged_candidate = _converged_candidate(
+                    entry=entry,
+                    min_trials=convergence.min_trials,
+                    delta_js_threshold=convergence.delta_js_threshold,
+                    epsilon_new_threshold=convergence.epsilon_new_threshold,
+                    epsilon_ci_half_width=convergence.epsilon_ci_half_width,
+                )
+
+                if converged_candidate:
                     consecutive_converged += 1
                 else:
                     consecutive_converged = 0
 
                 if (
                     valid_trials >= convergence.min_trials
-                    and entry["converged_candidate"]
+                    and converged_candidate
                     and consecutive_converged >= convergence.patience_batches
                     and not pending_retries
                 ):
@@ -285,6 +304,8 @@ async def execute_trials(
                 if total_trials >= call_cap:
                     stop_reason = "max_trials_reached"
                     break
+
+                prev_distribution = distribution
         finally:
             for _ in workers:
                 await queue.put(None)
@@ -303,23 +324,23 @@ async def execute_trials(
     if stop_reason is None:
         stop_reason = "max_trials_reached"
 
-    distribution = _distribution(counts_by_label, valid_trials)
-    top_label = _top_label(labels, counts_by_label, valid_trials)
-    top_p = distribution.get(top_label) if top_label else None
-    top_ci = _wilson_ci(counts_by_label.get(top_label, 0), valid_trials) if top_label else None
+    distribution = _distribution(counts_by_mode, valid_trials)
+    top_mode_id = _top_mode_id(counts_by_mode)
+    top_p = distribution.get(top_mode_id) if top_mode_id else None
+    top_ci = _wilson_ci(counts_by_mode.get(top_mode_id, 0), valid_trials) if top_mode_id else None
     entropy = _entropy(distribution) if valid_trials > 0 else None
-    margin = _margin(distribution, labels) if valid_trials > 0 else None
+    margin = _margin(distribution) if valid_trials > 0 else None
     disagreement_rate = 1.0 - top_p if top_p is not None else None
 
     aggregates_payload = {
-        "instance_id": instance_id,
-        "labels": labels,
-        "counts": counts_by_label,
-        "distribution": distribution,
+        "question_id": question_id,
+        "discovered_mode_count": len(counts_by_mode),
+        "counts_by_mode_id": counts_by_mode,
+        "distribution_by_mode_id": distribution,
         "valid_trials": valid_trials,
         "total_trials": total_trials,
         "parse_error_rate": _safe_divide(parse_error_count, total_trials),
-        "top_label": top_label,
+        "top_mode_id": top_mode_id,
         "top_p": top_p,
         "top_ci_low": top_ci[0] if top_ci else None,
         "top_ci_high": top_ci[1] if top_ci else None,
@@ -332,7 +353,7 @@ async def execute_trials(
 
     metrics_payload = {
         "run_id": resolved_config.run.run_id,
-        "instance_id": instance_id,
+        "question_id": question_id,
         "stop_reason": stop_reason,
         "stop_at_trials": total_trials,
         "valid_trials_total": valid_trials,
@@ -342,6 +363,10 @@ async def execute_trials(
         "converged": stop_reason == "converged",
         "batches_completed": batches_completed,
         "convergence_trace": convergence_trace,
+        "timing": {
+            "started_at": resolved_config.run.started_at,
+            "ended_at": datetime.now(timezone.utc).isoformat(),
+        },
     }
     if stop_error:
         metrics_payload["stop_error"] = stop_error
@@ -354,7 +379,7 @@ async def execute_trials(
         parse_error_count=parse_error_count,
         batches_completed=batches_completed,
         converged=stop_reason == "converged",
-        top_label=top_label,
+        top_mode_id=top_mode_id,
         top_p=top_p,
         top_ci_low=top_ci[0] if top_ci else None,
         top_ci_high=top_ci[1] if top_ci else None,
@@ -370,9 +395,8 @@ async def _execute_one_trial(
     item: WorkItem,
     worker_id: int,
     run_id: str,
-    instance_id: str | None = None,
-    prompt_hash: str,
-    labels: list[str],
+    question_id: str | None = None,
+    question_hash: str,
     llm_config: LLMConfig,
     client: Any,
 ) -> TrialOutcome:
@@ -396,8 +420,7 @@ async def _execute_one_trial(
             "run_id": run_id,
             "trial_id": item.trial_id,
             "atom_id": item.atom.atom_id,
-            "prompt_hash": prompt_hash,
-            "labels": labels,
+            "question_hash": question_hash,
         },
     )
     request_body, overrides = build_request_body(request, default_provider_routing=default_routing)
@@ -412,11 +435,14 @@ async def _execute_one_trial(
     routing = None
     latency_ms = None
     parse_valid = False
-    decision = None
+    outcome_text = None
     rationale = None
+    trace_summary = None
     parse_error = None
     retry_messages = None
     error_text = None
+    embedded_text = None
+    mode_id = None
 
     try:
         response = await client.generate(request)
@@ -427,9 +453,12 @@ async def _execute_one_trial(
         model_returned = response.model_returned
         routing = response.routing
         latency_ms = response.latency_ms
-        parse_valid, decision, rationale, parse_error = _parse_decision(response_text, labels)
-        if not parse_valid:
-            retry_messages = build_retry_messages(item.messages, response_text, labels)
+        parse_valid, outcome_text, rationale, trace_summary, parse_error = _parse_output(response_text)
+        if parse_valid and outcome_text is not None:
+            embedded_text = _embedded_text(outcome_text, rationale)
+            mode_id = _mode_id(embedded_text)
+        else:
+            retry_messages = build_retry_messages(item.messages, response_text)
     except Exception as exc:
         error_text = str(exc)
     duration_ms = int((time.monotonic() - start) * 1000)
@@ -438,14 +467,14 @@ async def _execute_one_trial(
     trial_record = {
         "trial_id": item.trial_id,
         "run_id": run_id,
+        "question_id": question_id,
         "batch_index": item.batch_index,
         "worker_id": worker_id + 1,
         "atom_id": item.atom.atom_id,
         "model": item.atom.model,
         "temperature": item.atom.temperature,
         "persona_id": item.atom.persona_id,
-        "instance_id": instance_id,
-        "prompt_hash": prompt_hash,
+        "question_hash": question_hash,
         "retries_used": item.retries_used,
         "request": {
             "body": request_body,
@@ -473,8 +502,11 @@ async def _execute_one_trial(
 
     parsed_record = {
         "trial_id": item.trial_id,
-        "decision": decision,
+        "outcome": outcome_text,
         "rationale": rationale,
+        "trace_summary": trace_summary,
+        "embedded_text": embedded_text,
+        "mode_id": mode_id,
         "parse_valid": parse_valid,
         "retries_used": item.retries_used,
     }
@@ -487,7 +519,8 @@ async def _execute_one_trial(
         trial_record=trial_record,
         parsed_record=parsed_record,
         parse_valid=parse_valid,
-        decision=decision,
+        mode_id=mode_id,
+        embedded_text=embedded_text,
         retry_messages=retry_messages,
         retries_used=item.retries_used,
         atom=item.atom,
@@ -495,31 +528,28 @@ async def _execute_one_trial(
     )
 
 
-def build_messages(prompt_text: str, labels: list[str], persona_id: str | None) -> list[dict[str, Any]]:
-    label_list = ", ".join(labels)
+def build_messages(question_text: str, persona_id: str | None) -> list[dict[str, Any]]:
     parts = []
     if persona_id:
         parts.append(f"Persona: {persona_id}.")
     parts.append("Respond ONLY with valid JSON.")
-    parts.append('The JSON object must use keys "decision" and "rationale".')
-    parts.append(f'Decision must be one of: {label_list}.')
+    parts.append('The JSON object must use keys "outcome", "rationale", and "trace_summary".')
+    parts.append('"outcome" is required; "rationale" and "trace_summary" are optional strings.')
     system_prompt = " ".join(parts)
     return [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": prompt_text},
+        {"role": "user", "content": question_text},
     ]
 
 
 def build_retry_messages(
     messages: list[dict[str, Any]],
     invalid_output: str,
-    labels: list[str],
 ) -> list[dict[str, Any]]:
-    label_list = ", ".join(labels)
     corrective = (
         "Your output was invalid. Output ONLY valid JSON of the form "
-        '{"decision": "<label>", "rationale": "<string>"} '
-        f"where decision is one of: {label_list}."
+        '{"outcome": "<string>", "rationale": "<string>", "trace_summary": "<string>"} '
+        "with outcome required and the other fields optional."
     )
     return list(messages) + [
         {"role": "assistant", "content": invalid_output},
@@ -527,27 +557,82 @@ def build_retry_messages(
     ]
 
 
-def _parse_decision(
+def _parse_output(
     text: str,
-    labels: list[str],
-) -> tuple[bool, str | None, str | None, str | None]:
+) -> tuple[bool, str | None, str | None, str | None, str | None]:
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
-        return False, None, None, f"invalid_json: {exc.msg}"
+        return False, None, None, None, f"invalid_json: {exc.msg}"
     if not isinstance(payload, dict):
-        return False, None, None, "invalid_json: not an object"
-    decision = payload.get("decision")
-    if not isinstance(decision, str):
-        return False, None, None, "invalid_decision: not a string"
-    if decision not in labels:
-        return False, None, None, "invalid_decision: label not allowed"
+        return False, None, None, None, "invalid_json: not an object"
+    outcome = payload.get("outcome")
+    if not isinstance(outcome, str) or not outcome.strip():
+        return False, None, None, None, "invalid_outcome: required string"
     rationale = payload.get("rationale")
-    if rationale is None:
-        rationale = ""
-    if not isinstance(rationale, str):
-        return False, None, None, "invalid_rationale: not a string"
-    return True, decision, rationale, None
+    trace_summary = payload.get("trace_summary")
+    if rationale is not None and not isinstance(rationale, str):
+        return False, None, None, None, "invalid_rationale: not a string"
+    if trace_summary is not None and not isinstance(trace_summary, str):
+        return False, None, None, None, "invalid_trace_summary: not a string"
+    return True, outcome.strip(), rationale, trace_summary, None
+
+
+def _embedded_text(outcome: str, rationale: str | None) -> str:
+    parts = [_normalize_text(outcome)]
+    if rationale:
+        parts.append(_normalize_text(rationale))
+    return "\n".join(parts)
+
+
+def _mode_id(embedded_text: str) -> str:
+    digest = hashlib.sha256(embedded_text.encode("utf-8")).hexdigest()
+    return f"mode_{digest[:12]}"
+
+
+def _normalize_text(text: str) -> str:
+    collapsed = " ".join(text.strip().split())
+    return collapsed.lower()
+
+
+def _new_mode_rate(
+    batch_results: list[TrialOutcome],
+    seen_modes: set[str],
+    batch_size: int,
+) -> tuple[float, set[str]]:
+    if batch_size <= 0:
+        return 0.0, set(seen_modes)
+    updated = set(seen_modes)
+    new_mode_count = 0
+    for outcome in batch_results:
+        if outcome.parse_valid and outcome.mode_id:
+            if outcome.mode_id not in updated:
+                new_mode_count += 1
+                updated.add(outcome.mode_id)
+    return new_mode_count / batch_size, updated
+
+
+def _converged_candidate(
+    *,
+    entry: dict[str, Any],
+    min_trials: int,
+    delta_js_threshold: float,
+    epsilon_new_threshold: float,
+    epsilon_ci_half_width: float | None,
+) -> bool:
+    if entry["valid_trials_total"] < min_trials:
+        return False
+    js_divergence = entry.get("js_divergence")
+    if js_divergence is None or js_divergence > delta_js_threshold:
+        return False
+    if entry.get("new_mode_rate") is None or entry["new_mode_rate"] > epsilon_new_threshold:
+        return False
+    if epsilon_ci_half_width is None:
+        return True
+    top_ci_half_width = entry.get("top_ci_half_width")
+    if top_ci_half_width is None:
+        return False
+    return top_ci_half_width <= epsilon_ci_half_width
 
 
 def _convergence_entry(
@@ -555,45 +640,40 @@ def _convergence_entry(
     batch_index: int,
     total_trials: int,
     valid_trials: int,
-    counts_by_label: dict[str, int],
-    labels: list[str],
-    epsilon: float,
-    min_trials: int,
+    counts_by_mode: dict[str, int],
+    distribution_by_mode: dict[str, float],
+    top_mode_id: str | None,
+    top_p: float | None,
+    top_ci: tuple[float, float, float] | None,
+    js_divergence: float | None,
+    new_mode_rate: float,
 ) -> dict[str, Any]:
-    distribution = _distribution(counts_by_label, valid_trials)
-    top_label = _top_label(labels, counts_by_label, valid_trials)
-    top_p = distribution.get(top_label) if top_label else None
-    ci = _wilson_ci(counts_by_label.get(top_label, 0), valid_trials) if top_label else None
-    converged_candidate = False
-    if ci is not None and valid_trials >= min_trials:
-        half_width = ci[2]
-        converged_candidate = half_width is not None and half_width <= epsilon
-
     return {
         "batch_index": batch_index,
         "trials_completed_total": total_trials,
         "valid_trials_total": valid_trials,
-        "counts_by_label": dict(counts_by_label),
-        "distribution_by_label": distribution,
-        "top_label": top_label,
+        "counts_by_mode_id": dict(counts_by_mode),
+        "distribution_by_mode_id": distribution_by_mode,
+        "top_mode_id": top_mode_id,
         "top_p": top_p,
-        "top_ci_low": ci[0] if ci else None,
-        "top_ci_high": ci[1] if ci else None,
-        "top_ci_half_width": ci[2] if ci else None,
-        "converged_candidate": converged_candidate,
+        "top_ci_low": top_ci[0] if top_ci else None,
+        "top_ci_high": top_ci[1] if top_ci else None,
+        "top_ci_half_width": top_ci[2] if top_ci else None,
+        "js_divergence": js_divergence,
+        "new_mode_rate": new_mode_rate,
     }
 
 
 def _distribution(counts: dict[str, int], total: int) -> dict[str, float]:
     if total <= 0:
-        return {label: 0.0 for label in counts}
+        return {}
     return {label: count / total for label, count in counts.items()}
 
 
-def _top_label(labels: list[str], counts: dict[str, int], total: int) -> str | None:
-    if total <= 0:
+def _top_mode_id(counts: dict[str, int]) -> str | None:
+    if not counts:
         return None
-    return max(labels, key=lambda label: counts.get(label, 0))
+    return max(counts, key=counts.get)
 
 
 def _wilson_ci(successes: int, total: int, z: float = 1.96) -> tuple[float, float, float] | None:
@@ -619,13 +699,10 @@ def _entropy(distribution: dict[str, float]) -> float:
     return total
 
 
-def _margin(distribution: dict[str, float], labels: list[str]) -> float:
-    if not labels:
+def _margin(distribution: dict[str, float]) -> float:
+    if not distribution:
         return 0.0
-    sorted_values = sorted(
-        (distribution.get(label, 0.0) for label in labels),
-        reverse=True,
-    )
+    sorted_values = sorted(distribution.values(), reverse=True)
     if len(sorted_values) == 1:
         return sorted_values[0]
     return sorted_values[0] - sorted_values[1]
@@ -639,6 +716,30 @@ def _safe_divide(numerator: int, denominator: int) -> float:
 
 def _hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _js_divergence(
+    prev: dict[str, float] | None,
+    current: dict[str, float],
+) -> float | None:
+    if prev is None:
+        return None
+    keys = set(prev) | set(current)
+    if not keys:
+        return 0.0
+    p = [prev.get(key, 0.0) for key in keys]
+    q = [current.get(key, 0.0) for key in keys]
+    m = [(pi + qi) / 2 for pi, qi in zip(p, q)]
+    return 0.5 * _kl_divergence(p, m) + 0.5 * _kl_divergence(q, m)
+
+
+def _kl_divergence(p: list[float], q: list[float]) -> float:
+    total = 0.0
+    for pi, qi in zip(p, q):
+        if pi <= 0 or qi <= 0:
+            continue
+        total += pi * math.log2(pi / qi)
+    return total
 
 
 def _sample_atom(rng: random.Random, atoms: list[QAtom]) -> QAtom:
