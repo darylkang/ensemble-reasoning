@@ -15,17 +15,15 @@ import typer
 
 from arbiter.config import (
     BudgetGuardrail,
+    ClusteringConfig,
     ConvergenceConfig,
     ExecutionConfig,
     LLMConfig,
     LLMRequestDefaults,
-    PersonaPolicy,
+    ProtocolConfig,
     ResolvedConfig,
-    TemperaturePolicy,
     TrialBudget,
-    build_q_distribution,
-    dedupe_preserve_order,
-    load_persona_ids,
+    materialize_q_distribution,
     slugify_run_name,
 )
 from arbiter.engine import execute_trials
@@ -40,12 +38,12 @@ from arbiter.ui.render import (
     render_error,
     render_gap,
     render_info,
-    render_notice,
     render_step_header,
     render_success,
     render_summary_table,
     render_warning,
 )
+from arbiter.wizard import WizardState, run_wizard as run_wizard_flow
 
 app = typer.Typer(add_completion=False, help="Research harness for ensemble reasoning.")
 llm_app = typer.Typer(add_completion=False, help="LLM utilities and diagnostics.")
@@ -69,124 +67,74 @@ def run_wizard() -> None:
     started_at = datetime.now(timezone.utc)
     default_model = os.getenv("ARBITER_DEFAULT_MODEL", "openai/gpt-5")
     api_key_present = bool(os.getenv("OPENROUTER_API_KEY"))
-    llm_mode = "openrouter" if api_key_present else "mock"
-    if not api_key_present:
-        render_notice("OpenRouter API key not found. Remote calls are disabled; using mock client.")
+    state = WizardState(
+        default_model=default_model,
+        api_key_present=api_key_present,
+        config_path=Path("arbiter.config.json"),
+    )
+    state = run_wizard_flow(state)
 
-    step_total = 9
-    render_step_header(1, step_total, "Run identity", "Label the run for traceability.")
-    run_name_input = typer.prompt("Run name (optional)", default="", show_default=False)
-    run_name = run_name_input.strip() or "auto"
-    run_slug = slugify_run_name(run_name)
-    render_gap(after_prompt=True)
-
-    render_step_header(2, step_total, "Question", "Provide the question text.")
-    question_text = _prompt_text("Question text (single line; use \\n for newlines)")
-    question_id = _build_question_id(question_text)
+    input_config = state.input_config
+    question_block = input_config.get("question", {}) or {}
+    question_text = str(question_block.get("text", "")).strip()
+    if not question_text:
+        render_error("Question text is required.")
+        raise typer.Exit(code=1)
+    question_id = question_block.get("id") or _build_question_id(question_text)
+    question_block["id"] = question_id
+    question_block.setdefault("metadata", {})
     question_record = {
         "question_id": question_id,
         "question_text": question_text,
-        "metadata": {},
+        "metadata": question_block.get("metadata") or {},
     }
-    render_gap(after_prompt=True)
 
-    render_step_header(3, step_total, "Sampling design", "Choose rung, models, trial cap, and temperature policy.")
-    heterogeneity_rung = _prompt_choice("Heterogeneity rung", ["H0", "H1", "H2"], "H1")
-    models = _prompt_csv("Model slugs (comma-separated)", default_model)
-    k_max = _prompt_int("Max trials (cap)", 16, min_value=1)
-
-    temp_kind = _prompt_choice("Temperature policy", ["fixed", "list"], "fixed")
-    if temp_kind == "fixed":
-        temperatures = [_prompt_float("Temperature", 0.7)]
-        temperature_policy = TemperaturePolicy(kind="fixed", temperatures=temperatures)
-    else:
-        temperatures = _prompt_float_list("Temperatures (comma-separated)", "0.7,1.0")
-        temperature_policy = TemperaturePolicy(kind="list", temperatures=temperatures)
-    render_gap(after_prompt=True)
-
-    render_step_header(4, step_total, "Personas", "Optionally provide a persona bank and selection mode.")
-    persona_policy = _prompt_persona_policy()
-    render_gap(after_prompt=True)
-
-    persona_ids_for_q = persona_policy.persona_ids if persona_policy.selection_mode == "sample_uniform" else None
-    render_step_header(5, step_total, "Execution controls", "Set concurrency and convergence thresholds.")
-    worker_count = _prompt_int("Worker concurrency (W)", 8, min_value=1)
-    batch_size = _prompt_int("Batch size (B)", worker_count, min_value=1)
-    delta_js = _prompt_float("JS divergence threshold (delta_js)", 0.02)
-    epsilon_new = _prompt_float("New mode rate threshold (epsilon_new)", 0.01)
-    epsilon_ci = _prompt_float("Top-mode CI half-width threshold (epsilon_ci)", 0.05)
-    epsilon_ci = None if epsilon_ci <= 0 else epsilon_ci
-    min_trials_default = max(64, batch_size)
-    min_trials = _prompt_int("Minimum valid trials before early stop", min_trials_default, min_value=1)
-    patience_batches = _prompt_int("Patience batches", 2, min_value=1)
-    max_retries = _prompt_int("Max parse retries per trial", 2, min_value=0)
-    convergence_config = ConvergenceConfig(
-        delta_js_threshold=delta_js,
-        epsilon_new_threshold=epsilon_new,
-        epsilon_ci_half_width=epsilon_ci,
-        min_trials=min_trials,
-        patience_batches=patience_batches,
+    llm_config, llm_mode_label, llm_notes = _build_llm_config(
+        input_config=input_config,
+        default_model=default_model,
+        api_key_present=api_key_present,
     )
-    execution_config = ExecutionConfig(
-        worker_count=worker_count,
-        batch_size=batch_size,
-        max_retries=max_retries,
-        convergence=convergence_config,
-    )
-    render_gap(after_prompt=True)
 
-    render_step_header(6, step_total, "Materialize Q(c)", "Generate the explicit configuration distribution.")
+    step_total = len(state.step_order) + 2
+    render_step_header(
+        len(state.step_order) + 1,
+        step_total,
+        "Resolve configuration",
+        "Materialize Q(c) and write run artifacts.",
+    )
     with status_spinner("Materializing Q(c)"):
-        q_distribution = build_q_distribution(models, temperatures, persona_ids_for_q)
+        q_distribution, temperature_policy, persona_policy, model_slugs = materialize_q_distribution(input_config)
     render_success(f"Q(c) materialized with {len(q_distribution.atoms)} atoms.")
     render_gap(after_prompt=False)
 
-    planned_total_trials = k_max
-    render_step_header(7, step_total, "Budget and output", "Set a per-question call guardrail and output path.")
-    max_calls = _prompt_int(
-        "Max model calls (per question)",
-        planned_total_trials,
-        min_value=1,
-    )
+    protocol_config = _build_protocol_config(input_config)
+    clustering_config = _build_clustering_config(input_config)
+    execution_config = _build_execution_config(input_config)
+    worker_count = execution_config.worker_count
+    batch_size = execution_config.batch_size
+    k_max = int(input_config.get("execution", {}).get("k_max", 1000))
+    trial_budget = TrialBudget(k_max=k_max, scope="per_question")
+    max_calls = k_max
+    planned_total_trials = min(k_max, max_calls)
     budget_guardrail = BudgetGuardrail(max_calls=max_calls, scope="per_question")
+    heterogeneity_rung = _infer_rung(
+        model_slugs,
+        persona_policy.persona_ids,
+        temperature_policy.kind,
+        protocol_config.type,
+    )
 
-    output_base_dir_input = typer.prompt("Output base directory", default="./runs")
-    output_base_dir = str(Path(output_base_dir_input.strip() or "./runs").expanduser())
-    render_gap(after_prompt=True)
+    run_name = state.run_name.strip() or "auto"
+    run_slug = slugify_run_name(run_name)
+    output_base_dir = str(state.output_base_dir)
 
-    render_step_header(8, step_total, "Write run artifacts", "Write resolved config to disk.")
     timestamp = started_at.strftime("%Y%m%d_%H%M%S")
     run_id = f"{timestamp}-{uuid.uuid4().hex[:8]}"
     run_dir = create_run_dir(Path(output_base_dir), timestamp, run_slug)
-    with status_spinner("Writing resolved config"):
+    with status_spinner("Writing run artifacts"):
         try:
-            notes = []
-            if llm_mode == "mock":
-                notes.append("OpenRouter API key missing; LLM mode set to mock.")
-
-            planned_total_trials = min(k_max, max_calls)
-            trial_budget = TrialBudget(k_max=k_max, scope="per_question")
-            llm_request_defaults = LLMRequestDefaults(
-                temperature=temperatures[0] if temp_kind == "fixed" else None,
-                top_p=None,
-                max_tokens=None,
-                seed=None,
-                stop=None,
-                response_format=None,
-                tools=None,
-                tool_choice=None,
-                parallel_tool_calls=None,
-            )
-            llm_config = LLMConfig(
-                client="openrouter",
-                mode=llm_mode,
-                model=models[0],
-                request_defaults=llm_request_defaults,
-                routing_defaults={"allow_fallbacks": False},
-                extra_body_defaults={},
-            )
             resolved_config = ResolvedConfig.build_from_wizard_inputs(
-                schema_version="0.6",
+                schema_version="0.7",
                 run_name=run_name,
                 run_slug=run_slug,
                 run_id=run_id,
@@ -194,23 +142,30 @@ def run_wizard() -> None:
                 output_dir=str(run_dir),
                 started_at=started_at.isoformat(),
                 heterogeneity_rung=heterogeneity_rung,
-                models=models,
+                models=model_slugs,
                 llm=llm_config,
+                protocol=protocol_config,
+                clustering=clustering_config,
                 execution=execution_config,
                 temperature_policy=temperature_policy,
                 personas=persona_policy,
                 trial_budget=trial_budget,
                 budget_guardrail=budget_guardrail,
                 q_distribution=q_distribution,
-                notes=notes,
+                notes=llm_notes,
             )
 
             resolved = resolved_config.to_dict()
             config_hash = compute_hash(resolved)
             semantic_config_hash = compute_hash(resolved_config.semantic.to_dict())
 
-            config_path = run_dir / "config.resolved.json"
-            write_json(config_path, resolved)
+            input_config.setdefault("llm", {})
+            input_config["llm"]["mode"] = llm_mode_label
+            input_config["llm"].setdefault("model", llm_config.model)
+            input_config.setdefault("question", {})["id"] = question_id
+
+            write_json(run_dir / "config.input.json", input_config)
+            write_json(run_dir / "config.resolved.json", resolved)
         except Exception as exc:
             cleanup_run_dir(run_dir)
             render_error(f"Failed to write run artifacts: {exc}")
@@ -219,7 +174,12 @@ def run_wizard() -> None:
     render_success("Run config written.")
     render_gap(after_prompt=False)
 
-    render_step_header(9, step_total, "Execute trials", "Run batched trials with convergence checks.")
+    render_step_header(
+        len(state.step_order) + 2,
+        step_total,
+        "Execute trials",
+        "Run batched trials with convergence checks.",
+    )
     execution_result = None
     execution_error = None
     try:
@@ -338,106 +298,129 @@ def llm_dry_run() -> None:
             render_gap(after_prompt=False)
 
 
-def _prompt_choice(prompt: str, choices: list[str], default: str) -> str:
-    normalized_choices = {choice.lower(): choice for choice in choices}
-    while True:
-        response = typer.prompt(f"{prompt} ({'/'.join(choices)})", default=default)
-        normalized = response.strip().lower()
-        if normalized in normalized_choices:
-            return normalized_choices[normalized]
-        render_warning(f"Invalid choice: {response}. Choose from {', '.join(choices)}.")
-
-
-def _prompt_persona_policy() -> PersonaPolicy:
-    while True:
-        persona_bank_input = typer.prompt("Persona bank path (optional)", default="", show_default=False)
-        persona_bank_path = persona_bank_input.strip() or None
-        selection_mode = "none"
-        persona_ids: list[str] = []
-        persona_loaded = False
-
-        if persona_bank_path:
-            selection_mode = _prompt_choice(
-                "Persona selection mode",
-                ["none", "sample_uniform"],
-                "sample_uniform",
-            )
-            if selection_mode == "sample_uniform":
-                load_result = load_persona_ids(Path(persona_bank_path))
-                if load_result.loaded:
-                    persona_ids = load_result.persona_ids
-                    persona_loaded = True
-                else:
-                    render_error(f"{load_result.error}. Provide a valid persona bank or leave empty.")
-                    continue
-
-        return PersonaPolicy(
-            persona_bank_path=persona_bank_path,
-            selection_mode=selection_mode,
-            persona_ids=persona_ids,
-            loaded=persona_loaded,
-        )
-
-
-def _prompt_csv(prompt: str, default: str) -> list[str]:
-    while True:
-        response = typer.prompt(prompt, default=default)
-        items = [item.strip() for item in response.split(",") if item.strip()]
-        items = dedupe_preserve_order(items)
-        if items:
-            return items
-        render_warning("Please provide at least one value.")
-
-
-def _prompt_text(prompt: str) -> str:
-    while True:
-        response = typer.prompt(prompt, default="", show_default=False)
-        if response.strip():
-            return response
-        render_warning("Prompt text is required.")
-
-
 def _build_question_id(question_text: str) -> str:
     digest = hashlib.sha256(question_text.encode("utf-8")).hexdigest()
     return f"question_{digest[:10]}"
 
 
-def _prompt_int(prompt: str, default: int, min_value: int = 1) -> int:
-    while True:
-        response = typer.prompt(prompt, default=str(default))
-        try:
-            value = int(response)
-        except ValueError:
-            render_warning("Please enter an integer.")
-            continue
-        if value < min_value:
-            render_warning(f"Value must be >= {min_value}.")
-            continue
-        return value
+def _infer_rung(
+    models: list[str],
+    persona_ids: list[str],
+    temperature_kind: str,
+    protocol_type: str,
+) -> str:
+    if protocol_type != "independent":
+        return "H4"
+    if len(models) > 1:
+        return "H3"
+    if persona_ids:
+        return "H2"
+    if temperature_kind != "fixed":
+        return "H1"
+    return "H0"
 
 
-def _prompt_float(prompt: str, default: float) -> float:
-    while True:
-        response = typer.prompt(prompt, default=str(default))
-        try:
-            return float(response)
-        except ValueError:
-            render_warning("Please enter a number.")
+def _build_protocol_config(input_config: dict[str, object]) -> ProtocolConfig:
+    protocol = input_config.get("protocol", {}) or {}
+    protocol_type = str(protocol.get("type", "independent"))
+    return ProtocolConfig(type=protocol_type)
 
 
-def _prompt_float_list(prompt: str, default: str) -> list[float]:
-    while True:
-        response = typer.prompt(prompt, default=default)
-        parts = [part.strip() for part in response.split(",") if part.strip()]
-        if not parts:
-            render_warning("Please enter one or more numbers.")
-            continue
-        try:
-            values = [float(part) for part in parts]
-        except ValueError:
-            render_warning("Invalid list; use comma-separated numbers.")
-            continue
-        return values
+def _build_clustering_config(input_config: dict[str, object]) -> ClusteringConfig:
+    clustering = input_config.get("clustering", {}) or {}
+    method = str(clustering.get("method", "hash_baseline"))
+    tau = float(clustering.get("tau", 0.85))
+    embed_text = str(clustering.get("embed_text", "outcome+rationale"))
+    return ClusteringConfig(method=method, tau=tau, embed_text=embed_text)
+
+
+def _build_execution_config(input_config: dict[str, object]) -> ExecutionConfig:
+    execution = input_config.get("execution", {}) or {}
+    convergence = input_config.get("convergence", {}) or {}
+
+    worker_count = int(execution.get("workers", 8))
+    batch_size = int(execution.get("batch_size", worker_count))
+    max_retries = int(execution.get("retries", 2))
+
+    epsilon_ci = convergence.get("epsilon_ci_half_width", 0.05)
+    if epsilon_ci is not None:
+        epsilon_ci = float(epsilon_ci)
+        if epsilon_ci <= 0:
+            epsilon_ci = None
+
+    convergence_config = ConvergenceConfig(
+        delta_js_threshold=float(convergence.get("delta_js_threshold", 0.02)),
+        epsilon_new_threshold=float(convergence.get("epsilon_new_threshold", 0.01)),
+        epsilon_ci_half_width=epsilon_ci,
+        min_trials=int(convergence.get("min_trials", 64)),
+        patience_batches=int(convergence.get("patience_batches", 2)),
+    )
+    return ExecutionConfig(
+        worker_count=max(1, worker_count),
+        batch_size=max(1, batch_size),
+        max_retries=max(0, max_retries),
+        convergence=convergence_config,
+    )
+
+
+def _build_llm_config(
+    *,
+    input_config: dict[str, object],
+    default_model: str,
+    api_key_present: bool,
+) -> tuple[LLMConfig, str, list[str]]:
+    notes: list[str] = []
+    llm = input_config.setdefault("llm", {})
+    mode_input = str(llm.get("mode") or ("remote" if api_key_present else "mock")).lower()
+    if mode_input in {"remote", "openrouter"}:
+        resolved_mode = "openrouter"
+        mode_label = "remote"
+    elif mode_input == "mock":
+        resolved_mode = "mock"
+        mode_label = "mock"
+    else:
+        resolved_mode = "mock"
+        mode_label = "mock"
+
+    if resolved_mode == "openrouter" and not api_key_present:
+        resolved_mode = "mock"
+        mode_label = "mock"
+        notes.append("OpenRouter API key missing; LLM mode set to mock.")
+
+    model = str(llm.get("model") or default_model)
+    llm["model"] = model
+    llm["mode"] = mode_label
+
+    request_defaults = llm.get("request_defaults") or {}
+    routing_defaults = llm.get("routing_defaults")
+    if routing_defaults is None:
+        routing_defaults = {"allow_fallbacks": False}
+    extra_body_defaults = llm.get("extra_body_defaults") or {}
+
+    llm["request_defaults"] = request_defaults
+    llm["routing_defaults"] = routing_defaults
+    llm["extra_body_defaults"] = extra_body_defaults
+
+    request_defaults_obj = LLMRequestDefaults(
+        temperature=request_defaults.get("temperature"),
+        top_p=request_defaults.get("top_p"),
+        max_tokens=request_defaults.get("max_tokens"),
+        seed=request_defaults.get("seed"),
+        stop=request_defaults.get("stop"),
+        response_format=request_defaults.get("response_format"),
+        tools=request_defaults.get("tools"),
+        tool_choice=request_defaults.get("tool_choice"),
+        parallel_tool_calls=request_defaults.get("parallel_tool_calls"),
+    )
+    llm_config = LLMConfig(
+        client="openrouter",
+        mode=resolved_mode,
+        model=model,
+        request_defaults=request_defaults_obj,
+        routing_defaults=dict(routing_defaults),
+        extra_body_defaults=dict(extra_body_defaults),
+    )
+    return llm_config, mode_label, notes
 
 
 def main() -> None:

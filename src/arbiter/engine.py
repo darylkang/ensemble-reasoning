@@ -28,6 +28,7 @@ class WorkItem:
     batch_index: int
     retries_used: int
     atom: QAtom
+    temperature: float
     messages: list[dict[str, Any]]
 
 
@@ -36,6 +37,7 @@ class PendingRetry:
     trial_id: str
     retries_used: int
     atom: QAtom
+    temperature: float
     messages: list[dict[str, Any]]
 
 
@@ -190,12 +192,14 @@ async def execute_trials(
                                 batch_index=batch_index,
                                 retries_used=retry.retries_used,
                                 atom=retry.atom,
+                                temperature=retry.temperature,
                                 messages=retry.messages,
                             )
                         )
                         continue
                     trial_counter += 1
                     atom = _sample_atom(rng, semantic.q_distribution.atoms)
+                    temperature = _sample_temperature(rng, semantic.temperature_policy, atom.temperature)
                     messages = build_messages(question_text, atom.persona_id)
                     batch_items.append(
                         WorkItem(
@@ -203,6 +207,7 @@ async def execute_trials(
                             batch_index=batch_index,
                             retries_used=0,
                             atom=atom,
+                            temperature=temperature,
                             messages=messages,
                         )
                     )
@@ -236,6 +241,7 @@ async def execute_trials(
                                         trial_id=f"trial_{trial_counter:06d}",
                                         retries_used=outcome.retries_used + 1,
                                         atom=outcome.atom,
+                                        temperature=outcome.trial_record.get("temperature", outcome.atom.temperature),
                                         messages=outcome.retry_messages,
                                     )
                                 )
@@ -405,7 +411,7 @@ async def _execute_one_trial(
     request = LLMRequest(
         messages=item.messages,
         model=item.atom.model,
-        temperature=item.atom.temperature,
+        temperature=item.temperature,
         top_p=request_defaults.top_p,
         max_tokens=request_defaults.max_tokens,
         seed=request_defaults.seed,
@@ -472,7 +478,7 @@ async def _execute_one_trial(
         "worker_id": worker_id + 1,
         "atom_id": item.atom.atom_id,
         "model": item.atom.model,
-        "temperature": item.atom.temperature,
+        "temperature": item.temperature,
         "persona_id": item.atom.persona_id,
         "question_hash": question_hash,
         "retries_used": item.retries_used,
@@ -745,6 +751,21 @@ def _kl_divergence(p: list[float], q: list[float]) -> float:
 def _sample_atom(rng: random.Random, atoms: list[QAtom]) -> QAtom:
     weights = [atom.weight for atom in atoms]
     return rng.choices(atoms, weights=weights, k=1)[0]
+
+
+def _sample_temperature(rng: random.Random, policy: Any, fallback: float) -> float:
+    kind = getattr(policy, "kind", "fixed")
+    temperatures = list(getattr(policy, "temperatures", []) or [])
+    if kind == "range" and len(temperatures) >= 2:
+        low, high = temperatures[0], temperatures[1]
+        if high < low:
+            low, high = high, low
+        return rng.uniform(low, high)
+    if temperatures:
+        if kind == "list":
+            return rng.choice(temperatures)
+        return temperatures[0]
+    return fallback
 
 
 def _worker_description(worker_id: int, completed: int, atom: QAtom | None) -> str:

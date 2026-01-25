@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import product
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -93,6 +94,28 @@ class LLMConfig:
             "request_defaults": self.request_defaults.to_dict(),
             "routing_defaults": self.routing_defaults,
             "extra_body_defaults": self.extra_body_defaults,
+        }
+
+
+@dataclass(frozen=True)
+class ProtocolConfig:
+    type: str
+
+    def to_dict(self) -> dict:
+        return {"type": self.type}
+
+
+@dataclass(frozen=True)
+class ClusteringConfig:
+    method: str
+    tau: float
+    embed_text: str
+
+    def to_dict(self) -> dict:
+        return {
+            "method": self.method,
+            "tau": self.tau,
+            "embed_text": self.embed_text,
         }
 
 
@@ -223,6 +246,8 @@ class ResolvedConfig:
         heterogeneity_rung: str,
         models: list[str],
         llm: "LLMConfig",
+        protocol: "ProtocolConfig",
+        clustering: "ClusteringConfig",
         execution: "ExecutionConfig",
         temperature_policy: TemperaturePolicy,
         personas: PersonaPolicy,
@@ -243,6 +268,8 @@ class ResolvedConfig:
             heterogeneity_rung=heterogeneity_rung,
             models=models,
             llm=llm,
+            protocol=protocol,
+            clustering=clustering,
             execution=execution,
             temperature_policy=temperature_policy,
             personas=personas,
@@ -258,6 +285,8 @@ class SemanticConfig:
     heterogeneity_rung: str
     models: list[str]
     llm: LLMConfig
+    protocol: ProtocolConfig
+    clustering: ClusteringConfig
     execution: ExecutionConfig
     temperature_policy: TemperaturePolicy
     personas: PersonaPolicy
@@ -270,6 +299,8 @@ class SemanticConfig:
             "heterogeneity_rung": self.heterogeneity_rung,
             "models": self.models,
             "llm": self.llm.to_dict(),
+            "protocol": self.protocol.to_dict(),
+            "clustering": self.clustering.to_dict(),
             "execution": self.execution.to_dict(),
             "temperature_policy": self.temperature_policy.to_dict(),
             "personas": self.personas.to_dict(),
@@ -283,6 +314,221 @@ class PersonaLoadResult:
     persona_ids: list[str]
     loaded: bool
     error: str | None
+
+
+CANONICAL_SCHEMA_VERSION = "1.0"
+
+
+def default_canonical_config(*, default_model: str, llm_mode: str) -> dict[str, Any]:
+    return {
+        "schema_version": CANONICAL_SCHEMA_VERSION,
+        "question": {
+            "id": None,
+            "text": "",
+            "metadata": {},
+        },
+        "q": {
+            "decode": {
+                "temperature": {"type": "fixed", "value": 0.7},
+                "extra": {},
+            },
+            "personas": {
+                "items": [],
+                "default_behavior": "neutral_if_empty",
+            },
+            "models": {
+                "items": [{"slug": default_model, "weight": 1.0}],
+            },
+        },
+        "protocol": {"type": "independent"},
+        "execution": {
+            "k_max": 1000,
+            "workers": 8,
+            "batch_size": 8,
+            "retries": 2,
+        },
+        "convergence": {
+            "delta_js_threshold": 0.02,
+            "epsilon_new_threshold": 0.01,
+            "epsilon_ci_half_width": 0.05,
+            "min_trials": 64,
+            "patience_batches": 2,
+        },
+        "clustering": {
+            "method": "hash_baseline",
+            "tau": 0.85,
+            "embed_text": "outcome+rationale",
+        },
+        "llm": {
+            "mode": llm_mode,
+            "model": default_model,
+            "request_defaults": {},
+            "routing_defaults": {"allow_fallbacks": False},
+            "extra_body_defaults": {},
+        },
+    }
+
+
+def normalize_canonical_config(data: dict[str, Any], *, default_model: str, llm_mode: str) -> dict[str, Any]:
+    base = default_canonical_config(default_model=default_model, llm_mode=llm_mode)
+    merged = _merge_dicts(base, data)
+    question = merged.setdefault("question", {})
+    question.setdefault("id", None)
+    question.setdefault("text", "")
+    question.setdefault("metadata", {})
+
+    q = merged.setdefault("q", {})
+    decode = q.setdefault("decode", {})
+    temperature = decode.setdefault("temperature", {"type": "fixed", "value": 0.7})
+    decode.setdefault("extra", {})
+    if temperature.get("type") not in {"fixed", "range"}:
+        temperature["type"] = "fixed"
+        temperature["value"] = 0.7
+
+    personas = q.setdefault("personas", {})
+    personas.setdefault("items", [])
+    personas.setdefault("default_behavior", "neutral_if_empty")
+
+    models = q.setdefault("models", {})
+    models.setdefault("items", [{"slug": default_model, "weight": 1.0}])
+
+    merged.setdefault("protocol", {"type": "independent"})
+    merged.setdefault("execution", base["execution"])
+    merged.setdefault("convergence", base["convergence"])
+    merged.setdefault("clustering", base["clustering"])
+    merged.setdefault("llm", base["llm"])
+
+    merged["q"]["models"]["items"] = _normalize_weighted_items(models["items"], key="slug")
+    merged["q"]["personas"]["items"] = _normalize_weighted_items(personas["items"], key="id")
+
+    if question.get("text") and not question.get("id"):
+        question["id"] = f"question_{_hash_text(question['text'])[:10]}"
+
+    return merged
+
+
+def _merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in base.items():
+        result[key] = value
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _merge_dicts(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _normalize_weighted_items(items: list[Any], *, key: str) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, str):
+            normalized.append({key: item, "weight": 1.0})
+        elif isinstance(item, dict):
+            value = item.get(key)
+            if value:
+                normalized.append({key: value, "weight": float(item.get("weight", 1.0))})
+    if not normalized:
+        return []
+    total = sum(item["weight"] for item in normalized if item["weight"] > 0)
+    if total <= 0:
+        total = float(len(normalized))
+        for item in normalized:
+            item["weight"] = 1.0
+    for item in normalized:
+        item["weight"] = item["weight"] / total
+    normalized.sort(key=lambda item: str(item.get(key)))
+    return normalized
+
+
+def materialize_q_distribution(config: dict[str, Any]) -> tuple[QDistribution, TemperaturePolicy, PersonaPolicy, list[str]]:
+    q = config["q"]
+    decode = q["decode"]
+    temperature_config = decode["temperature"]
+    temp_type = temperature_config.get("type", "fixed")
+    temperatures: list[float]
+    if temp_type == "range":
+        temp_min = float(temperature_config.get("min", 0.2))
+        temp_max = float(temperature_config.get("max", 1.0))
+        if temp_max < temp_min:
+            temp_min, temp_max = temp_max, temp_min
+        temperatures = [temp_min, temp_max]
+        temperature_policy = TemperaturePolicy(kind="range", temperatures=temperatures)
+        temp_values = [round((temp_min + temp_max) / 2, 6)]
+    else:
+        temp_value = float(temperature_config.get("value", 0.7))
+        temperatures = [temp_value]
+        temperature_policy = TemperaturePolicy(kind="fixed", temperatures=temperatures)
+        temp_values = temperatures
+
+    models = q["models"]["items"]
+    personas = q["personas"]["items"]
+    default_behavior = q["personas"].get("default_behavior", "neutral_if_empty")
+
+    model_items = _normalize_weighted_items(models, key="slug")
+    persona_items = _normalize_weighted_items(personas, key="id")
+    if not persona_items and default_behavior == "neutral_if_empty":
+        persona_items = [{"id": None, "weight": 1.0}]
+
+    atoms: list[QAtom] = []
+    combos = list(product(model_items, persona_items, temp_values))
+    weights: list[float] = []
+    for model_item, persona_item, temperature in combos:
+        weight = model_item["weight"] * persona_item["weight"]
+        weights.append(weight)
+        atom_id = _stable_atom_id(model_item["slug"], persona_item.get("id"), temperature)
+        atoms.append(
+            QAtom(
+                atom_id=atom_id,
+                model=model_item["slug"],
+                temperature=temperature,
+                persona_id=persona_item.get("id"),
+                weight=weight,
+            )
+        )
+    total_weight = sum(weights) if weights else 1.0
+    atoms = [
+        QAtom(
+            atom_id=atom.atom_id,
+            model=atom.model,
+            temperature=atom.temperature,
+            persona_id=atom.persona_id,
+            weight=atom.weight / total_weight,
+        )
+        for atom in atoms
+    ]
+
+    strategy = {
+        "name": "factorized",
+        "description": "Weighted cartesian product over models, personas, and decoding policy.",
+        "inputs": {
+            "models": model_items,
+            "personas": persona_items,
+            "temperature": temperature_config,
+            "decode_extra": decode.get("extra", {}),
+        },
+    }
+    weights_info = {"type": "normalized", "sum": round(sum(atom.weight for atom in atoms), 6)}
+    q_distribution = QDistribution(strategy=strategy, atoms=atoms, weights=weights_info)
+
+    persona_policy = PersonaPolicy(
+        persona_bank_path=None,
+        selection_mode="weighted" if persona_items else "none",
+        persona_ids=[item.get("id") for item in persona_items if item.get("id")],
+        loaded=bool(persona_items),
+    )
+    model_slugs = [item["slug"] for item in model_items]
+    return q_distribution, temperature_policy, persona_policy, model_slugs
+
+
+def _stable_atom_id(model_slug: str, persona_id: str | None, temperature: float) -> str:
+    payload = f"{model_slug}|{persona_id or ''}|{temperature:.6f}"
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return f"atom_{digest[:12]}"
+
+
+def _hash_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def slugify_run_name(name: str) -> str:
