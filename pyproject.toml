@@ -11,8 +11,9 @@ requires-python = ">=3.14"
 license = { file = "LICENSE" }
 dependencies = [
   "httpx>=0.28.0",
-  "rich==14.2.0",
-  "typer==0.21.1",
+  "rich>=14.0.0",
+  "typer>=0.21.0",
+  "textual>=0.70.0",
 ]
 
 [project.scripts]
@@ -20,7 +21,7 @@ arbiter = "arbiter.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/arbiter"]
-include = ["src/arbiter/catalog/*.json"]
+include = ["src/arbiter/catalog/*.json", "src/arbiter/ui/*.tcss"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/arbiter/catalog/*.json"]
+include = ["src/arbiter/catalog/*.json", "src/arbiter/ui/*.tcss"]

@@ -1,0 +1,42 @@
+Screen {
+  background: #1d2021;
+  color: #ebdbb2;
+}
+
+.surface {
+  border: round #665c54;
+  padding: 1 2;
+  margin: 1 2;
+}
+
+.surface-title {
+  color: #fabd2f;
+  text-style: bold;
+}
+
+#welcome-subtitle {
+  color: #d5c4a1;
+}
+
+#mode-list, #config-list, #runmode-list, #temp-policy {
+  height: auto;
+  margin-top: 1;
+}
+
+#question-input {
+  height: 8;
+}
+
+#execution-workers, #execution-checkpoint, #review-summary, #receipt {
+  height: auto;
+  margin-top: 1;
+}
+
+#key-hint {
+  color: #d5c4a1;
+  margin: 0 2;
+}
+
+Button {
+  margin-top: 1;
+}

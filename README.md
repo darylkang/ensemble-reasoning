@@ -46,17 +46,14 @@ python -m pip install "git+https://github.com/darylkang/ensemble-reasoning.git@m
 ```
 
 ## Run
-`arbiter` launches a decision-tree wizard:
+`arbiter` launches a Textual TUI wizard (arrow keys to navigate, space to toggle, Enter to confirm):
 
-1) Welcome + environment check (OpenRouter key, remote vs mock)
+1) Welcome + environment check (OpenRouter key, remote vs mock; Remote disabled if missing key)
 2) Config mode selection (load `arbiter.config.json` or guided build)
-3) Question text `x` (multi-line or file path)
-4) Decode params `d` (fixed or ranged temperature, defaults/extras)
-5) Persona mix `p`
-6) Model mix `m` (OpenRouter slugs, default from `ARBITER_DEFAULT_MODEL`)
-7) Protocol `π` (independent vs interaction/debate)
-8) Advanced settings (execution + convergence + clustering)
-9) Review -> Execute -> Receipt
+3) Question text (multi-line TextArea)
+4) Quick Run (recommended) or Customize
+5) If Customize: decode params, persona mix, model mix, protocol, advanced settings
+6) Review -> Execute -> Receipt
 
 Runs write a folder under `./runs` following the artifact contract in `docs/spec.md`, including `manifest.json`, `config.input.json`, `config.resolved.json`, `question.json`, `trials.jsonl`, `parsed.jsonl`, `aggregates.json`, `metrics.json`, and clustering outputs.
 

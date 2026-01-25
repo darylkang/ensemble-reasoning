@@ -11,23 +11,12 @@ import math
 import random
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from arbiter.config import LLMConfig, QAtom, ResolvedConfig
 from arbiter.llm.client import build_request_body, create_client
 from arbiter.llm.types import LLMRequest
 from arbiter.storage import append_jsonl, write_json
-from rich.console import Group
-from rich.live import Live
-
-from arbiter.ui.console import get_console
-from arbiter.ui.progress import build_execution_progress
-from arbiter.ui.render import (
-    build_batch_checkpoint,
-    build_execution_header,
-    render_execution_header,
-    render_info,
-)
 
 
 @dataclass(slots=True)
@@ -87,6 +76,7 @@ async def execute_trials(
     run_dir: Path,
     resolved_config: ResolvedConfig,
     question: dict[str, Any],
+    on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> ExecutionResult:
     question_text = str(question.get("question_text", ""))
     if not question_text.strip():
@@ -114,6 +104,10 @@ async def execute_trials(
     convergence = execution.convergence
     temperature_policy_payload = _temperature_policy_payload(semantic.temperature_policy)
 
+    def _emit(event: dict[str, Any]) -> None:
+        if on_event is not None:
+            on_event(event)
+
     rng_seed = random.randrange(2**32)
     rng = random.Random(rng_seed)
 
@@ -133,30 +127,20 @@ async def execute_trials(
     batches_completed = 0
     prev_distribution: dict[str, float] | None = None
 
-    console = get_console()
-    use_live = console.is_terminal
-    progress = None
-    overall_task_id = None
-    worker_task_ids: list[int] = []
     worker_counts = [0 for _ in range(worker_count)]
 
     client = create_client(llm_config.mode, default_routing=llm_config.routing_defaults)
 
-    header_summary = _execution_header_summary(
-        resolved_config=resolved_config,
-        question_text=question_text,
-        call_cap=call_cap,
-        worker_count=worker_count,
-        batch_size=batch_size,
+    _emit(
+        {
+            "type": "execution_started",
+            "run_id": resolved_config.run.run_id,
+            "question_id": question_id,
+            "call_cap": call_cap,
+            "worker_count": worker_count,
+            "batch_size": batch_size,
+        }
     )
-    header_panel = None
-    checkpoint_panel = None
-    live: Live | None = None
-    if use_live:
-        header_panel = build_execution_header(header_summary)
-        checkpoint_panel = build_batch_checkpoint(None)
-    else:
-        render_execution_header(header_summary)
 
     async def worker_loop(
         worker_id: int,
@@ -168,12 +152,17 @@ async def execute_trials(
             if item is None:
                 queue.task_done()
                 return
-            if progress and overall_task_id is not None:
-                progress.update(
-                    worker_task_ids[worker_id],
-                    description=_worker_description(worker_id, worker_counts[worker_id], item.atom),
-                    completed=worker_counts[worker_id],
-                )
+            _emit(
+                {
+                    "type": "trial_started",
+                    "worker_id": worker_id,
+                    "trial_id": item.trial_id,
+                    "atom_id": item.atom.atom_id,
+                    "model": item.atom.model,
+                    "persona_id": item.atom.persona_id,
+                    "temperature": item.temperature,
+                }
+            )
             outcome = await _execute_one_trial(
                 item=item,
                 worker_id=worker_id,
@@ -184,12 +173,17 @@ async def execute_trials(
                 client=client,
             )
             worker_counts[worker_id] += 1
-            if progress and overall_task_id is not None:
-                progress.update(
-                    worker_task_ids[worker_id],
-                    description=_worker_description(worker_id, worker_counts[worker_id], None),
-                    completed=worker_counts[worker_id],
-                )
+            _emit(
+                {
+                    "type": "trial_finished",
+                    "worker_id": worker_id,
+                    "trial_id": item.trial_id,
+                    "parse_valid": outcome.parse_valid,
+                    "mode_id": outcome.mode_id,
+                    "error": outcome.error,
+                    "completed": worker_counts[worker_id],
+                }
+            )
             await results.put(outcome)
             queue.task_done()
 
@@ -280,14 +274,23 @@ async def execute_trials(
                         else:
                             stop_reason = "parse_failure"
 
-                    if progress and overall_task_id is not None:
-                        progress.update(overall_task_id, completed=total_trials)
-
-                if not console.is_terminal:
-                    render_info(
-                        f"Batch {batch_index} complete: {total_trials}/{call_cap} trials, "
-                        f"{valid_trials} valid."
+                    _emit(
+                        {
+                            "type": "progress",
+                            "completed": total_trials,
+                            "valid_trials": valid_trials,
+                            "call_cap": call_cap,
+                        }
                     )
+
+                _emit(
+                    {
+                        "type": "batch_complete",
+                        "batch_index": batch_index,
+                        "trials_completed": total_trials,
+                        "valid_trials": valid_trials,
+                    }
+                )
 
                 new_mode_rate, seen_modes_after = _new_mode_rate(batch_results, seen_modes, len(batch_items))
                 seen_modes.clear()
@@ -311,9 +314,16 @@ async def execute_trials(
                     new_mode_rate=new_mode_rate,
                 )
                 convergence_trace.append(entry)
-                if console.is_terminal and live and header_panel:
-                    checkpoint_panel = build_batch_checkpoint(_checkpoint_row(entry, stop_reason))
-                    live.update(Group(header_panel, progress, checkpoint_panel), refresh=True)
+                checkpoint_row = _checkpoint_row(entry, stop_reason)
+                _emit(
+                    {
+                        "type": "batch_checkpoint",
+                        "batch_index": batch_index,
+                        "row": checkpoint_row,
+                        "stop_reason": stop_reason,
+                        "entry": entry,
+                    }
+                )
 
                 if stop_reason is not None:
                     break
@@ -351,15 +361,7 @@ async def execute_trials(
             await asyncio.gather(*workers, return_exceptions=True)
 
     try:
-        if use_live:
-            progress, overall_task_id, worker_task_ids = build_execution_progress(worker_count, call_cap)
-            layout = Group(header_panel, progress, checkpoint_panel)
-            with Live(layout, console=console, refresh_per_second=10) as live:
-                progress.start()
-                await run_loop()
-                progress.stop()
-        else:
-            await run_loop()
+        await run_loop()
     finally:
         await client.aclose()
 
@@ -414,7 +416,7 @@ async def execute_trials(
         metrics_payload["stop_error"] = stop_error
     write_json(metrics_path, metrics_payload)
 
-    return ExecutionResult(
+    result = ExecutionResult(
         stop_reason=stop_reason,
         stop_at_trials=total_trials,
         valid_trials=valid_trials,
@@ -430,6 +432,16 @@ async def execute_trials(
         margin=margin,
         disagreement_rate=disagreement_rate,
     )
+    _emit(
+        {
+            "type": "execution_finished",
+            "stop_reason": result.stop_reason,
+            "stop_at_trials": result.stop_at_trials,
+            "valid_trials": result.valid_trials,
+            "batches_completed": result.batches_completed,
+        }
+    )
+    return result
 
 
 async def _execute_one_trial(
