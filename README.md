@@ -22,6 +22,7 @@ The key framing is explicit configuration sampling `Q(c)` and the induced distri
 
 ## Configuration
 Copy `.env.example` to `.env`, fill in values, and keep `.env` untracked. Arbiter reads these environment variables at runtime.
+You can optionally create `arbiter.config.json` in the working directory; the wizard will load it and only prompt for missing fields.
 
 ## Install
 From a local clone:
@@ -42,7 +43,7 @@ python -m pip install "git+https://github.com/darylkang/ensemble-reasoning.git@m
 `arbiter run` launches a decision-tree wizard:
 
 1) Welcome + environment check (OpenRouter key, remote vs mock)
-2) Config mode selection (load `Q(c)` JSON or guided build)
+2) Config mode selection (load `arbiter.config.json` or guided build)
 3) Question text `x` (multi-line or file path)
 4) Decode params `d` (fixed or ranged temperature, defaults/extras)
 5) Persona mix `p`
@@ -51,7 +52,7 @@ python -m pip install "git+https://github.com/darylkang/ensemble-reasoning.git@m
 8) Advanced settings (execution + convergence + clustering)
 9) Review -> Execute -> Receipt
 
-Runs write a folder under `./runs` following the artifact contract in `docs/spec.md`, including `manifest.json`, `config.resolved.json`, `question.json`, `trials.jsonl`, `parsed.jsonl`, `aggregates.json`, `metrics.json`, and clustering outputs.
+Runs write a folder under `./runs` following the artifact contract in `docs/spec.md`, including `manifest.json`, `config.input.json`, `config.resolved.json`, `question.json`, `trials.jsonl`, `parsed.jsonl`, `aggregates.json`, `metrics.json`, and clustering outputs.
 
 ```bash
 arbiter --help

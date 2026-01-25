@@ -43,10 +43,25 @@ The output object is embedded and clustered to define emergent modes; no predefi
 ## Operational Distribution
 Mode distributions are defined with respect to an explicit configuration distribution `Q(c)`. `Q(c)` must be resolved and serialized in run artifacts so that `P_Q(y|x)` is well-defined and auditable.
 
+## Canonical Config (`arbiter.config.json`)
+Arbiter accepts a canonical, human-editable configuration file (`arbiter.config.json`) that mirrors the wizard steps. The canonical config is factorized and normalized before being resolved into explicit `Q(c)` atoms.
+
+Top-level structure:
+- `schema_version`: canonical config schema version (current: `1.0`).
+- `question`: `{id?, text, metadata}` (question text can be filled by the wizard if missing).
+- `q`: factorized `Q(c)` definition with weighted `models`, `personas`, and `decode` temperature policy.
+- `protocol`: `{type}` (independent for now).
+- `execution`: `{k_max, workers, batch_size, retries}`.
+- `convergence`: `{delta_js_threshold, epsilon_new_threshold, epsilon_ci_half_width, min_trials, patience_batches}`.
+- `clustering`: `{method, tau, embed_text}`.
+- `llm`: `{mode, model, request_defaults, routing_defaults, extra_body_defaults}`.
+
+Each run writes a `config.input.json` copy of the canonical config used to drive that run.
+
 ## Resolved Config Structure
 - `config.resolved.json` must separate `run` metadata from `semantic` configuration.
-- `schema_version` identifies the config schema; breaking changes bump this value (current: `0.6`).
-- `semantic` includes the heterogeneity rung, decoding settings, persona policy, `trial_budget` with `k_max`, call guardrails, `execution` controls, and the explicit `Q(c)` atoms/weights.
+- `schema_version` identifies the resolved config schema; breaking changes bump this value (current: `0.7`).
+- `semantic` includes the heterogeneity rung, `protocol`, `clustering`, decoding settings, persona policy, `trial_budget` with `k_max`, call guardrails, `execution` controls, and the explicit `Q(c)` atoms/weights.
 - `execution` includes `worker_count`, `batch_size`, `max_retries`, and `convergence` thresholds (`delta_js_threshold`, `epsilon_new_threshold`, `epsilon_ci_half_width`, `min_trials`, `patience_batches`).
 - `run` includes run identifiers and output paths; timestamps may be included for provenance.
 
@@ -103,7 +118,7 @@ The primary budget axis is the number of model calls. Token totals, cost estimat
 ## CLI UX Target
 The wizard is a decision tree:
 - Step 0: Welcome and environment check (OpenRouter key, remote vs mock).
-- Step 1: Config mode selection (load `Q(c)` JSON vs guided build); prompt only for missing fields if a config is loaded.
+- Step 1: Config mode selection (load `arbiter.config.json` vs guided build); prompt only for missing fields if a config is loaded.
 - Step 2: Collect question text `x` (multi-line input or file path).
 - Step 3: Decode params `d` (fixed temperature or sampled range; additional params via defaults/extras).
 - Step 4: Persona mix `p` (multi-select personas).
@@ -115,6 +130,7 @@ The wizard is a decision tree:
 ## Artifact Bundle Contract (Run Folder)
 Each run writes a self-contained directory containing:
 - manifest.json (run id, timestamp, git SHA, config hash, `semantic_config_hash`, python version)
+- config.input.json (canonical config used to drive the run, including question text)
 - config.resolved.json or config.resolved.yaml (resolved config with `run` metadata, `semantic` config, and `Q(c)` weights)
 - question.json (the primary question record)
 - trials.jsonl (one row per trial; includes atom/model/temperature/persona, effective request body, routing, overrides, timestamps, usage, and raw response)
