@@ -226,6 +226,11 @@ def run_wizard() -> None:
         top_summary = f"{execution_result.top_mode_id} ({execution_result.top_p:.3f}, CI {ci_summary})"
 
     top_modes = _collect_top_modes(run_dir, top_n=3)
+    checkpoints = _collect_last_checkpoints(run_dir, limit=3)
+    stop_explanation = _stop_explanation(
+        execution_result.stop_reason,
+        execution_config.convergence.patience_batches,
+    )
     summary = {
         "Stop reason": execution_result.stop_reason,
         "Trials executed": f"{execution_result.stop_at_trials} / {planned_total_trials}",
@@ -238,6 +243,8 @@ def run_wizard() -> None:
         title="Receipt",
         summary=summary,
         top_modes=top_modes,
+        checkpoints=checkpoints,
+        stop_explanation=stop_explanation,
         artifact_path=str(run_dir),
     )
     render_info(f"Artifacts written to {run_dir}")
@@ -483,6 +490,48 @@ def _collect_top_modes(run_dir: Path, top_n: int = 3) -> list[tuple[str, float, 
         exemplar = exemplars.get(mode_id, "n/a")
         result.append((mode_id, float(share), exemplar))
     return result
+
+
+def _collect_last_checkpoints(run_dir: Path, limit: int = 3) -> list[dict[str, str]]:
+    metrics_path = run_dir / "metrics.json"
+    if not metrics_path.exists():
+        return []
+    try:
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    trace = metrics.get("convergence_trace") or []
+    if not isinstance(trace, list) or not trace:
+        return []
+    rows: list[dict[str, str]] = []
+    for entry in trace[-limit:]:
+        if not isinstance(entry, dict):
+            continue
+        rows.append(
+            {
+                "Batch": str(entry.get("batch_index")),
+                "Trials": str(entry.get("trials_completed_total")),
+                "Modes": str(len(entry.get("counts_by_mode_id") or {})),
+                "JS": f"{entry.get('js_divergence'):.3f}" if entry.get("js_divergence") is not None else "n/a",
+                "New": f"{entry.get('new_mode_rate'):.3f}" if entry.get("new_mode_rate") is not None else "n/a",
+                "CI HW": f"{entry.get('top_ci_half_width'):.3f}" if entry.get("top_ci_half_width") is not None else "n/a",
+            }
+        )
+    return rows
+
+
+def _stop_explanation(stop_reason: str, patience: int) -> str:
+    if stop_reason == "converged":
+        return f"Converged after {patience} stable batches."
+    if stop_reason == "max_trials_reached":
+        return "Stopped after reaching the trial cap."
+    if stop_reason == "parse_failure":
+        return "Stopped after repeated parse failures."
+    if stop_reason == "llm_error":
+        return "Stopped due to an LLM error."
+    if stop_reason == "budget_exhausted":
+        return "Stopped after exhausting the call budget."
+    return "Stopped due to run termination."
 
 
 def _truncate_text(text: str, limit: int) -> str:

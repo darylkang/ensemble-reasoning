@@ -800,11 +800,16 @@ def _temperature_policy_payload(policy: Any) -> dict[str, Any]:
 
 
 def _worker_description(worker_id: int, completed: int, atom: QAtom | None) -> str:
-    label = f"worker {worker_id + 1}"
-    suffix = f"done {completed}"
-    if atom:
-        return f"{label} · running · {atom.atom_id} · {atom.model} · {suffix}"
-    return f"{label} · idle · {suffix}"
+    status = "RUNNING" if atom else "IDLE"
+    worker_label = f"W{worker_id + 1:02d}"
+    done = f"{completed:>4}"
+    model = _clip(atom.model if atom else "—", 22)
+    atom_id = _clip(atom.atom_id if atom else "—", 12)
+    persona = _clip(atom.persona_id if atom and atom.persona_id else "none", 10)
+    return (
+        f"{worker_label}  {status:<7}  done:{done}  "
+        f"model:{model:<22}  atom:{atom_id:<12}  persona:{persona:<10}"
+    )
 
 
 def _render_execution_header(
@@ -878,11 +883,19 @@ def _checkpoint_row(entry: dict[str, Any], stop_reason: str | None) -> dict[str,
     ci_half = entry.get("top_ci_half_width")
     stop = "yes" if stop_reason is not None else "no"
     return {
-        "batch": str(entry.get("batch_index")),
-        "trials": str(entry.get("trials_completed_total")),
-        "modes": str(modes),
-        "js": f"{js_divergence:.3f}" if js_divergence is not None else "n/a",
-        "new": f"{new_mode_rate:.3f}" if new_mode_rate is not None else "n/a",
-        "ci_hw": f"{ci_half:.3f}" if ci_half is not None else "n/a",
-        "stop": stop,
+        "Batch": str(entry.get("batch_index")),
+        "Trials": str(entry.get("trials_completed_total")),
+        "Modes": str(modes),
+        "JS": f"{js_divergence:.3f}" if js_divergence is not None else "n/a",
+        "New": f"{new_mode_rate:.3f}" if new_mode_rate is not None else "n/a",
+        "CI HW": f"{ci_half:.3f}" if ci_half is not None else "n/a",
+        "Stop": stop,
     }
+
+
+def _clip(text: str, width: int) -> str:
+    if len(text) <= width:
+        return text
+    if width <= 1:
+        return text[:width]
+    return text[: width - 1] + "…"

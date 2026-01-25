@@ -13,7 +13,6 @@ from arbiter.ui.console import get_console
 from arbiter.ui.render import (
     render_error,
     render_info,
-    render_mode_select_panel,
     render_selection_panel,
     render_step_header,
     render_summary_table,
@@ -203,52 +202,39 @@ def step_welcome(state: WizardState) -> None:
     config_exists = state.config_path.exists()
     config_status = "FOUND" if config_exists else "NOT FOUND"
     recommendation = "Load config" if config_exists else "Use guided wizard or create template"
-    default_mode = "REMOTE" if state.api_key_present else "MOCK"
-    state.selected_mode = state.selected_mode or default_mode.lower()
-    render_welcome_panel(
-        title="Arbiter",
-        subtitle="Ensemble reasoning run setup",
-        status_mode=default_mode,
-        status_openrouter="CONNECTED" if state.api_key_present else "MISSING KEY",
-        status_config=config_status,
-        recommendation=recommendation,
-        action="Press Enter to begin",
-    )
-    try:
-        input()
-    except EOFError:
-        return
-
-
-def step_mode_select(state: WizardState) -> None:
-    index, total = state.step_index("mode_select")
     default_mode = "remote" if state.api_key_present else "mock"
     state.selected_mode = state.selected_mode or default_mode
+
+    remote_enabled = state.api_key_present
+    note = None if remote_enabled else "Set OPENROUTER_API_KEY (in .env or env) to enable remote."
     while True:
-        remote_enabled = state.api_key_present
-        selected = state.selected_mode
-        options = [
-            ("Mock (no network calls)", "selected" if selected == "mock" else "idle", True),
+        mode_options = [
+            ("Mock (no network calls)", True, state.selected_mode == "mock"),
             (
-                "Remote (OpenRouter)",
-                "selected" if selected == "remote" else "idle",
+                "Remote (OpenRouter)"
+                if remote_enabled
+                else "Remote (requires OPENROUTER_API_KEY)",
                 remote_enabled,
+                state.selected_mode == "remote",
             ),
         ]
-        if not remote_enabled:
-            options[1] = ("Remote (requires OPENROUTER_API_KEY)", options[1][1], False)
-        render_mode_select_panel(
-            title=f"Step {index}/{total} · Mode selection",
-            description="Choose execution mode for this run.",
-            options=options,
-            instructions="Enter 1 or 2 to select, or press Enter to accept default.",
-            note="Set OPENROUTER_API_KEY (in .env or env) to enable remote."
-            if not remote_enabled
-            else None,
+        render_welcome_panel(
+            title="Arbiter",
+            subtitle="Ensemble reasoning run setup",
+            status_mode=state.selected_mode.upper(),
+            status_openrouter="CONNECTED" if remote_enabled else "MISSING KEY",
+            status_config=config_status,
+            mode_options=mode_options,
+            recommendation=recommendation,
+            action="Select mode (1/2) or press Enter to begin.",
+            note=note,
         )
+        if not get_console().is_terminal:
+            break
         response = typer.prompt("Mode", default=default_mode, show_default=True).strip().lower()
         if response in {"", "default"}:
-            response = default_mode
+            state.selected_mode = default_mode
+            break
         if response in {"1", "mock", "m"}:
             state.selected_mode = "mock"
             break
@@ -476,14 +462,13 @@ def step_run_setup(state: WizardState) -> None:
 
 
 register_step(Step("welcome", "Welcome", "Environment check and setup.", step_welcome, custom_surface=True))
-register_step(Step("mode_select", "Mode selection", "Choose mock or remote execution.", step_mode_select, custom_surface=True))
-register_step(Step("config_mode", "Config mode", "Load a config or run the guided wizard.", step_config_mode))
+register_step(Step("config_mode", "Configuration Mode", "Load a config or run the guided wizard.", step_config_mode))
 register_step(Step("question", "Question", "Provide the question text.", step_question))
-register_step(Step("decode", "Decode params", "Configure decoding parameters.", step_decode))
-register_step(Step("personas", "Persona mix", "Configure persona mix.", step_personas, custom_surface=True))
-register_step(Step("models", "Model mix", "Configure model mix.", step_models, custom_surface=True))
+register_step(Step("decode", "Decode Parameters", "Configure decoding parameters.", step_decode))
+register_step(Step("personas", "Persona Mix", "Configure persona mix.", step_personas, custom_surface=True))
+register_step(Step("models", "Model Mix", "Configure model mix.", step_models, custom_surface=True))
 register_step(Step("protocol", "Protocol", "Select the protocol type.", step_protocol))
 register_step(Step("advanced_gate", "Defaults", "Use recommended defaults or customize.", step_advanced_gate))
-register_step(Step("advanced", "Advanced settings", "Execution, convergence, and clustering.", step_advanced))
+register_step(Step("advanced", "Advanced Settings", "Execution, convergence, and clustering.", step_advanced))
 register_step(Step("review", "Review", "Confirm the configuration.", step_review))
-register_step(Step("run_setup", "Run setup", "Set run name and output path.", step_run_setup))
+register_step(Step("run_setup", "Run Setup", "Set run name and output path.", step_run_setup))

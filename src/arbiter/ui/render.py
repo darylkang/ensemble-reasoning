@@ -34,8 +34,10 @@ def render_welcome_panel(
     status_mode: str,
     status_openrouter: str,
     status_config: str,
+    mode_options: Sequence[tuple[str, bool, bool]],
     recommendation: str,
     action: str,
+    note: str | None = None,
 ) -> None:
     console = get_console()
     status = Text()
@@ -58,6 +60,12 @@ def render_welcome_panel(
     table.add_row("Status", status)
     table.add_row("Recommended", recommendation)
 
+    mode_lines = [Text("Mode", style="label")]
+    for index, (label, enabled, selected) in enumerate(mode_options, start=1):
+        marker = "[x]" if selected else "[ ]"
+        style = "value" if enabled else "disabled"
+        mode_lines.append(Text(f"{index:>2} {marker} {label}", style=style))
+
     panel = Panel(
         Group(
             Text(title, style="title"),
@@ -65,7 +73,10 @@ def render_welcome_panel(
             Text(""),
             table,
             Text(""),
+            *mode_lines,
+            Text(""),
             Text(action, style="dim"),
+            Text(note, style="dim") if note else Text(""),
         ),
         box=box.ROUNDED,
         border_style="border",
@@ -268,7 +279,7 @@ def render_batch_checkpoint(row: Mapping[str, str]) -> None:
     table.add_row(*[str(value) for value in row.values()])
     panel = Panel(
         table,
-        title=Text("Batch checkpoint", style="step"),
+        title=Text("BATCH CHECKPOINT", style="step"),
         title_align="left",
         border_style="border",
         padding=(0, 2),
@@ -282,6 +293,8 @@ def render_receipt_panel(
     title: str,
     summary: Mapping[str, str],
     top_modes: Sequence[tuple[str, float, str]],
+    checkpoints: Sequence[Mapping[str, str]],
+    stop_explanation: str | None,
     artifact_path: str,
 ) -> None:
     console = get_console()
@@ -297,17 +310,29 @@ def render_receipt_panel(
     else:
         mode_lines.append(Text("n/a", style="dim"))
 
+    checkpoint_table = None
+    if checkpoints:
+        checkpoint_table = Table(show_header=True, box=box.ROUNDED, pad_edge=False)
+        headers = list(checkpoints[0].keys())
+        for header in headers:
+            checkpoint_table.add_column(str(header), style="label", no_wrap=True)
+        for row in checkpoints:
+            checkpoint_table.add_row(*[str(row.get(header, "")) for header in headers])
+
+    group_items = [
+        Text(title, style="step"),
+        Text(""),
+        table,
+    ]
+    if stop_explanation:
+        group_items.extend([Text(""), Text(stop_explanation, style="subtitle")])
+    group_items.extend([Text(""), Text("Top Modes", style="subtitle"), *mode_lines])
+    if checkpoint_table:
+        group_items.extend([Text(""), Text("Last Checkpoints", style="subtitle"), checkpoint_table])
+    group_items.extend([Text(""), Text(f"Artifacts: {artifact_path}", style="dim")])
+
     panel = Panel(
-        Group(
-            Text(title, style="step"),
-            Text(""),
-            table,
-            Text(""),
-            Text("Top modes", style="subtitle"),
-            *mode_lines,
-            Text(""),
-            Text(f"Artifacts: {artifact_path}", style="dim"),
-        ),
+        Group(*group_items),
         box=box.ROUNDED,
         border_style="border",
         padding=(0, 2),
