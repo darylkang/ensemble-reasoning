@@ -3,7 +3,7 @@
 This document defines the high-level contract for arbiter. It is implementation-facing but intentionally light on mechanics.
 
 ## Notation
-- Question: `x` (the primary unit; sometimes called an instance in notation).
+- Question: `x` (the primary unit).
 - Configuration tuple: `c = (m, d, p, π)` (model, decoding, prompt/persona, protocol).
 - Configuration distribution: `Q(c)`.
 - Trial output object: `o` (structured free-form output).
@@ -14,7 +14,7 @@ This document defines the high-level contract for arbiter. It is implementation-
 
 ## Core Objects
 - Question: an immutable prompt with a stable question_id, question text, and optional metadata.
-- Trial: a single model call under a resolved configuration, storing the output object `o`, raw response, and metadata.
+- Trial: a single model call under a resolved configuration, storing output object `o`, raw response, and metadata.
 - Run: a collection of trials for one primary question by default, with a resolved configuration distribution, artifacts, and summary metrics.
 
 ## Execution Unit
@@ -23,7 +23,17 @@ This document defines the high-level contract for arbiter. It is implementation-
 - `question.json` contains one question record in current usage.
 
 ## Trial Output Contract
-Each trial must emit a structured output object `o`. The default contract is JSON-only, with required keys `answer` and `rationale`, and optional additional fields. This object is embedded and clustered to define emergent modes; no predefined categorical label set is required.
+Each trial must emit a structured output object `o` under a fixed schema (JSON-only):
+
+```json
+{
+  "outcome": "string (required)",
+  "rationale": "string (optional)",
+  "trace_summary": "string (optional)"
+}
+```
+
+The output object is embedded and clustered to define emergent modes; no predefined categorical label set is required.
 
 ## Parsing and Retries
 - Responses are parsed as JSON and validated for required keys.
@@ -35,9 +45,9 @@ Mode distributions are defined with respect to an explicit configuration distrib
 
 ## Resolved Config Structure
 - `config.resolved.json` must separate `run` metadata from `semantic` configuration.
-- `schema_version` identifies the config schema; breaking changes bump this value (current: `0.5`).
+- `schema_version` identifies the config schema; breaking changes bump this value (current: `0.6`).
 - `semantic` includes the heterogeneity rung, decoding settings, persona policy, `trial_budget` with `k_max`, call guardrails, `execution` controls, and the explicit `Q(c)` atoms/weights.
-- `execution` includes `worker_count`, `batch_size`, `max_retries`, and `convergence` thresholds (`epsilon_ci_half_width`, `min_trials`, `patience_batches`).
+- `execution` includes `worker_count`, `batch_size`, `max_retries`, and `convergence` thresholds (`delta_js_threshold`, `epsilon_new_threshold`, `epsilon_ci_half_width`, `min_trials`, `patience_batches`).
 - `run` includes run identifiers and output paths; timestamps may be included for provenance.
 
 ## LLM Configuration
@@ -54,7 +64,7 @@ Routing defaults must not silently enable fallbacks. Overrides must be explicit 
 - Decision uncertainty: dispersion of the induced mode distribution `P̂^Q(·|x)`.
 - Estimation uncertainty (meta-uncertainty): confidence intervals on mode shares or estimator variability due to finite trials.
 
-Estimation uncertainty must be reported per question, at minimum as a top-mode share CI. Aggregate bootstraps do not substitute for per-question estimation uncertainty.
+Estimation uncertainty must be reported per question, at minimum as a top-mode share CI when enabled. Aggregate bootstraps do not substitute for per-question estimation uncertainty.
 
 Confidence intervals are NOT probabilities of correctness; they are estimation CIs on the induced distribution `P_Q(y|x)`.
 
@@ -75,7 +85,8 @@ The primary budget axis is the number of model calls. Token totals, cost estimat
 
 ## Convergence and Early Stopping
 - Sampling should be batched, with convergence checks at batch boundaries.
-- Convergence is defined on mode distributions derived from clustering. Online clustering must maintain stable cluster identifiers; if offline clustering is used later, convergence must be defined on relabel-invariant summaries.
+- Convergence is defined on mode distributions derived from clustering.
+- Online clustering must maintain stable cluster identifiers; if offline clustering is used later, convergence must be defined on relabel-invariant summaries.
 - Convergence indicates estimate stability, not correctness.
 - Per-batch convergence metrics must be recorded in `metrics.json` under a `convergence_trace` array.
 - Runs must record `stop_reason` and `stop_at_trials` when execution halts.
@@ -107,7 +118,7 @@ Each run writes a self-contained directory containing:
 - config.resolved.json or config.resolved.yaml (resolved config with `run` metadata, `semantic` config, and `Q(c)` weights)
 - question.json (the primary question record)
 - trials.jsonl (one row per trial; includes atom/model/temperature/persona, effective request body, routing, overrides, timestamps, usage, and raw response)
-- parsed.jsonl (parsed output object `o`, parse validity, retries used, optional parse error)
+- parsed.jsonl (parsed output object `o`, parse validity, retries used, optional parse error, mode_id, embedded_text)
 - embeddings.jsonl or embeddings.npy (embedding vectors with model/version metadata)
 - clusters.json (cluster assignments, cluster summaries, and clustering parameters)
 - aggregates.json (per-question mode distributions, counts, uncertainty summaries, top-mode CI, and parse error rate)
@@ -119,6 +130,6 @@ Use Wilson intervals on the top-mode share and, optionally, on each per-cluster 
 
 ## Current Status (Implementation Snapshot)
 This section is non-normative and expected to change.
-- Some implementations may still use legacy artifact names (for example, `questions.jsonl`) during transition.
+- Some implementations may still use legacy artifact names during transition.
 - Embedding and clustering artifacts may not yet be produced in all runs.
 - Currently supported heterogeneity rungs are H0–H2.

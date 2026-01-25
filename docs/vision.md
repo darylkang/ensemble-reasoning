@@ -6,7 +6,7 @@ Arbiter is a research harness for an arXiv-oriented study. It prioritizes reprod
 ## Thesis
 A single answer is one sample. Reasoning is modeled as an induced landscape under an explicit configuration distribution `Q(c)`.
 
-The estimand is the induced distribution `P_Q(y|x)` where `x` is the question. The empirical estimate from finite trials is `P̂^Q(y|x)`. Changing `Q(c)` changes the estimand, so `Q(c)` must be explicit.
+The estimand is the induced distribution `P_Q(y|x)` where `x` is the question and `y := cluster(z)` is a discovered mode. The empirical estimate from finite trials is `P̂^Q(y|x)`. Changing `Q(c)` changes the estimand, so `Q(c)` must be explicit.
 
 ## Formal Framing
 - Configuration tuple: `c = (m, d, p, π)` where `m` is model/provider, `d` is decoding parameters, `p` is prompt/persona framing, and `π` is protocol.
@@ -17,7 +17,7 @@ The estimand is the induced distribution `P_Q(y|x)` where `x` is the question. T
 - Each trial must emit a parseable output object `o`; modes emerge from embedding and clustering rather than a predefined label set.
 
 ## Two Uncertainties
-- Decision uncertainty: dispersion of `P̂^Q(·|x)` over discovered modes (entropy, margin, or disagreement).
+- Mode uncertainty: dispersion of `P̂^Q(·|x)` over discovered modes (entropy, margin, or disagreement).
 - Estimation uncertainty (meta-uncertainty): uncertainty in `P̂^Q` due to finite trials, expressed through per-question confidence intervals and convergence diagnostics.
 
 Convergence refers to estimate stability, not correctness.
