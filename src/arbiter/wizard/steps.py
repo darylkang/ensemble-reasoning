@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 from typing import Any, Callable
 
 import typer
 
+from arbiter.catalog import CatalogItem, load_model_catalog, load_persona_catalog
 from arbiter.config import default_canonical_config
 from arbiter.ui.console import get_console
 from arbiter.ui.render import (
@@ -49,7 +51,7 @@ def run_step(step_id: str, state: WizardState) -> None:
     console = get_console()
     if step.step_id != "welcome" and not step.custom_surface:
         index, total = state.step_index(step.step_id)
-        if step.step_id in {"config_mode"}:
+        if index == 0 or state.is_preflight(step.step_id):
             render_step_header(None, None, step.title, step.description)
         else:
             render_step_header(index, total, step.title, step.description)
@@ -73,6 +75,33 @@ def _prompt_text(prompt: str) -> str:
         if response.strip():
             return response
         render_warning("Question text is required.")
+
+
+def _prompt_multiline(prompt: str) -> str:
+    console = get_console()
+    typer.echo(prompt)
+    lines: list[str] = []
+    if not console.is_terminal:
+        while True:
+            line = sys.stdin.readline()
+            if line == "":
+                break
+            line = line.rstrip("\n")
+            if line == "":
+                break
+            lines.append(line)
+        return "\n".join(lines)
+
+    while True:
+        line = input()
+        if line == "":
+            if lines:
+                break
+            render_warning("Question text is required.")
+            typer.echo(prompt)
+            continue
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def _prompt_csv(prompt: str, default: str, *, allow_empty: bool = False) -> list[str]:
@@ -119,28 +148,38 @@ def _prompt_yes_no(prompt: str, default: bool = False) -> bool:
         render_warning("Please enter y or n.")
 
 
+@dataclass(frozen=True)
+class SelectOption:
+    value: str
+    label: str
+
+
 def _multi_select(
     *,
     step_label: str,
     description: str,
-    options: list[str],
+    options: list[SelectOption],
     selected: set[str],
     allow_empty: bool,
 ) -> list[str]:
     console = get_console()
     if not console.is_terminal:
-        fallback = _prompt_csv(f"{step_label} (comma-separated)", ",".join(options), allow_empty=allow_empty)
+        fallback = _prompt_csv(
+            f"{step_label} (comma-separated)",
+            ",".join(option.value for option in options),
+            allow_empty=allow_empty,
+        )
         return fallback
 
-    options = [option for option in options if option]
-    if not options:
-        options = []
+    options = [option for option in options if option.value]
     while True:
+        display_options = [option.label for option in options]
+        selected_labels = {option.label for option in options if option.value in selected}
         render_selection_panel(
             title=step_label,
             description=description,
-            options=options,
-            selected=sorted(selected),
+            options=display_options,
+            selected=sorted(selected_labels),
             instructions="Toggle by number, A=all, N=none, C=confirm, +=add items",
         )
         response = typer.prompt("Selection", default="C")
@@ -151,7 +190,7 @@ def _multi_select(
                 continue
             return sorted(selected)
         if normalized.lower() in {"a", "all"}:
-            selected = set(options)
+            selected = {option.value for option in options}
             continue
         if normalized.lower() in {"n", "none"}:
             selected = set()
@@ -159,8 +198,8 @@ def _multi_select(
         if normalized.startswith("+"):
             additions = [item.strip() for item in normalized[1:].split(",") if item.strip()]
             for item in additions:
-                if item not in options:
-                    options.append(item)
+                if item and item not in [option.value for option in options]:
+                    options.append(SelectOption(value=item, label=item))
             continue
         parts = [part.strip() for part in normalized.split(",") if part.strip()]
         toggled = False
@@ -168,7 +207,7 @@ def _multi_select(
             if part.isdigit():
                 idx = int(part)
                 if 1 <= idx <= len(options):
-                    value = options[idx - 1]
+                    value = options[idx - 1].value
                     if value in selected:
                         selected.remove(value)
                     else:
@@ -176,6 +215,36 @@ def _multi_select(
                     toggled = True
         if not toggled:
             render_warning("Enter numbers to toggle, or C to confirm.")
+
+
+def _catalog_options(items: list[CatalogItem]) -> list[SelectOption]:
+    options: list[SelectOption] = []
+    for item in items:
+        label = item.value
+        if item.name and item.name.lower() != item.value.lower():
+            label = f"{label} · {item.name}"
+        if item.description:
+            label = f"{label} — {item.description}"
+        options.append(SelectOption(value=item.value, label=label))
+    return options
+
+
+def _merge_custom_options(options: list[SelectOption], values: list[str]) -> list[SelectOption]:
+    existing = {option.value for option in options}
+    for value in values:
+        if value and value not in existing:
+            options.append(SelectOption(value=value, label=value))
+            existing.add(value)
+    return options
+
+
+def _default_catalog_selection(items: list[CatalogItem], options: list[SelectOption]) -> set[str]:
+    defaults = {item.value for item in items if item.is_default}
+    if defaults:
+        return defaults
+    if options:
+        return {options[0].value}
+    return set()
 
 
 def _load_config_file(path: Path, state: WizardState) -> dict[str, Any]:
@@ -316,7 +385,13 @@ def step_question(state: WizardState) -> None:
     if question.get("text"):
         render_info("Question text loaded from config.")
         return
-    text = _prompt_text("Question text (single line; use \\n for newlines)")
+    text = _prompt_multiline("Paste question. End with an empty line.")
+    if not text.strip():
+        if not get_console().is_terminal:
+            render_error("Question text is required.")
+            raise typer.Exit(code=1)
+        render_warning("Question text is required.")
+        return step_question(state)
     question["text"] = text
 
 
@@ -339,9 +414,15 @@ def step_decode(state: WizardState) -> None:
 def step_personas(state: WizardState) -> None:
     q = state.input_config.setdefault("q", {})
     personas = q.setdefault("personas", {})
+    catalog_items, warning = load_persona_catalog()
+    if warning:
+        render_warning(warning)
     existing = [item.get("id") for item in personas.get("items", []) if item.get("id")]
-    options = existing[:]
-    selected = set(existing)
+    options = _catalog_options(catalog_items)
+    options = _merge_custom_options(options, existing)
+    if not options:
+        options = [SelectOption(value="neutral", label="neutral")]
+    selected = set(existing) if existing else _default_catalog_selection(catalog_items, options)
     index, total = state.step_index("personas")
     selection = _multi_select(
         step_label=f"Step {index}/{total} · Persona Mix",
@@ -357,11 +438,15 @@ def step_personas(state: WizardState) -> None:
 def step_models(state: WizardState) -> None:
     q = state.input_config.setdefault("q", {})
     models = q.setdefault("models", {})
+    catalog_items, warning = load_model_catalog()
+    if warning:
+        render_warning(warning)
     existing = [item.get("slug") for item in models.get("items", []) if item.get("slug")]
-    if not existing:
-        existing = [state.default_model]
-    options = existing[:]
-    selected = set(existing)
+    options = _catalog_options(catalog_items)
+    options = _merge_custom_options(options, existing)
+    if not options:
+        options = [SelectOption(value=state.default_model, label=state.default_model)]
+    selected = set(existing) if existing else _default_catalog_selection(catalog_items, options)
     index, total = state.step_index("models")
     selection = _multi_select(
         step_label=f"Step {index}/{total} · Model Mix",
@@ -388,6 +473,24 @@ def step_advanced_gate(state: WizardState) -> None:
     use_advanced = response.strip().lower() in {"a", "advanced"}
     state.use_advanced = use_advanced
     state.compute_step_order()
+
+
+def step_run_mode(state: WizardState) -> None:
+    console = get_console()
+    if not console.is_terminal:
+        state.use_customize = False
+        state.compute_step_order()
+        render_info("Quick Run selected. Using recommended defaults.")
+        return
+    response = typer.prompt(
+        "Quick Run or Customize? [Enter]=Quick / [C]=Customize",
+        default="",
+        show_default=False,
+    )
+    state.use_customize = response.strip().lower() in {"c", "custom", "customize"}
+    state.compute_step_order()
+    if not state.use_customize:
+        render_info("Quick Run selected. Using recommended defaults.")
 
 
 def step_advanced(state: WizardState) -> None:
@@ -471,6 +574,7 @@ def step_run_setup(state: WizardState) -> None:
 register_step(Step("welcome", "Welcome", "Environment check and setup.", step_welcome, custom_surface=True))
 register_step(Step("config_mode", "Configuration Mode", "Load a config or run the guided wizard.", step_config_mode))
 register_step(Step("question", "Question", "Provide the question text.", step_question))
+register_step(Step("run_mode", "Run Mode", "Choose quick defaults or customize settings.", step_run_mode))
 register_step(Step("decode", "Decode Parameters", "Configure decoding parameters.", step_decode))
 register_step(Step("personas", "Persona Mix", "Configure persona mix.", step_personas, custom_surface=True))
 register_step(Step("models", "Model Mix", "Configure model mix.", step_models, custom_surface=True))

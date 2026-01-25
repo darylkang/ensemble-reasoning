@@ -36,6 +36,10 @@ def _next_step(state: WizardState, step_id: str) -> str | None:
             return "review"
     if step_id == "question":
         if state.config_mode == "guided":
+            return "run_mode"
+        return "review"
+    if step_id == "run_mode":
+        if state.use_customize:
             return "decode"
         return "review"
     if step_id == "decode":

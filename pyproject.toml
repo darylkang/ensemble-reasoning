@@ -20,3 +20,7 @@ arbiter = "arbiter.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/arbiter"]
+include = ["src/arbiter/catalog/*.json"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/arbiter/catalog/*.json"]

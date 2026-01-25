@@ -17,9 +17,17 @@ from arbiter.config import LLMConfig, QAtom, ResolvedConfig
 from arbiter.llm.client import build_request_body, create_client
 from arbiter.llm.types import LLMRequest
 from arbiter.storage import append_jsonl, write_json
+from rich.console import Group
+from rich.live import Live
+
 from arbiter.ui.console import get_console
 from arbiter.ui.progress import build_execution_progress
-from arbiter.ui.render import render_batch_checkpoint, render_execution_header, render_info
+from arbiter.ui.render import (
+    build_batch_checkpoint,
+    build_execution_header,
+    render_execution_header,
+    render_info,
+)
 
 
 @dataclass(slots=True)
@@ -134,13 +142,21 @@ async def execute_trials(
 
     client = create_client(llm_config.mode, default_routing=llm_config.routing_defaults)
 
-    _render_execution_header(
+    header_summary = _execution_header_summary(
         resolved_config=resolved_config,
         question_text=question_text,
         call_cap=call_cap,
         worker_count=worker_count,
         batch_size=batch_size,
     )
+    header_panel = None
+    checkpoint_panel = None
+    live: Live | None = None
+    if use_live:
+        header_panel = build_execution_header(header_summary)
+        checkpoint_panel = build_batch_checkpoint(None)
+    else:
+        render_execution_header(header_summary)
 
     async def worker_loop(
         worker_id: int,
@@ -295,7 +311,9 @@ async def execute_trials(
                     new_mode_rate=new_mode_rate,
                 )
                 convergence_trace.append(entry)
-                render_batch_checkpoint(_checkpoint_row(entry, stop_reason))
+                if console.is_terminal and live and header_panel:
+                    checkpoint_panel = build_batch_checkpoint(_checkpoint_row(entry, stop_reason))
+                    live.update(Group(header_panel, progress, checkpoint_panel), refresh=True)
 
                 if stop_reason is not None:
                     break
@@ -335,8 +353,11 @@ async def execute_trials(
     try:
         if use_live:
             progress, overall_task_id, worker_task_ids = build_execution_progress(worker_count, call_cap)
-            with progress:
+            layout = Group(header_panel, progress, checkpoint_panel)
+            with Live(layout, console=console, refresh_per_second=10) as live:
+                progress.start()
                 await run_loop()
+                progress.stop()
         else:
             await run_loop()
     finally:
@@ -812,7 +833,7 @@ def _worker_description(worker_id: int, completed: int, atom: QAtom | None) -> s
     )
 
 
-def _render_execution_header(
+def _execution_header_summary(
     *,
     resolved_config: ResolvedConfig,
     question_text: str,
@@ -847,7 +868,7 @@ def _render_execution_header(
         "epsilon_new": f"{convergence.epsilon_new_threshold:.3f}",
         "epsilon_ci": epsilon_ci,
     }
-    render_execution_header(summary)
+    return summary
 
 
 def _format_temperature_policy(policy: Any) -> str:

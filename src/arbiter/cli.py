@@ -96,7 +96,7 @@ def run_wizard() -> None:
         api_key_present=api_key_present,
     )
 
-    numbered_steps = [step for step in state.step_order if step not in {"welcome", "config_mode"}]
+    numbered_steps = [step for step in state.step_order if not state.is_preflight(step)]
     step_total = len(numbered_steps) + 2
     render_step_header(
         len(numbered_steps) + 1,

@@ -1,0 +1,8 @@
+[
+  {
+    "id": "neutral",
+    "name": "Neutral",
+    "description": "Default neutral persona.",
+    "default": true
+  }
+]

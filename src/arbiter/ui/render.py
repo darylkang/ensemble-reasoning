@@ -43,14 +43,14 @@ def render_welcome_panel(
 ) -> None:
     console = get_console()
     status = Text()
-    status.append("MODE ", style="dim")
+    status.append("MODE ", style="label")
     status.append(status_mode, style="accent")
-    status.append("   OPENROUTER ", style="dim")
+    status.append("   OPENROUTER ", style="label")
     status.append(
         status_openrouter,
         style="success" if status_openrouter == "CONNECTED" else "warning",
     )
-    status.append("   CONFIG ", style="dim")
+    status.append("   CONFIG ", style="label")
     status.append(
         status_config,
         style="success" if status_config == "FOUND" else "warning",
@@ -76,8 +76,8 @@ def render_welcome_panel(
             Text(""),
             *mode_lines,
             Text(""),
-            Text(action, style="dim"),
-            Text(note, style="dim") if note else Text(""),
+            Text(action, style="label"),
+            Text(note, style="warning") if note else Text(""),
         ),
         title=Text(title, style="step"),
         title_align="left",
@@ -105,9 +105,9 @@ def render_mode_select_panel(
         style = "value" if enabled else "disabled"
         lines.append(Text(f"{index:>2} {marker} {label}", style=style))
     lines.append(Text(""))
-    lines.append(Text(instructions, style="dim"))
+    lines.append(Text(instructions, style="label"))
     if note:
-        lines.append(Text(note, style="dim"))
+        lines.append(Text(note, style="warning"))
     panel = Panel(
         Group(*lines),
         title=Text(title, style="step"),
@@ -258,7 +258,7 @@ def render_selection_panel(
     for index, option in enumerate(options, start=1):
         marker = "[x]" if option in selected_set else "[ ]"
         rows.append(Text(f"{index:>2} {marker} {option}", style="value"))
-    body = Group(desc, Text(""), *rows, Text(""), Text(instructions, style="dim"))
+    body = Group(desc, Text(""), *rows, Text(""), Text(instructions, style="label"))
     panel = Panel(
         body,
         title=Text(title, style="step"),
@@ -271,14 +271,13 @@ def render_selection_panel(
     console.print(panel)
 
 
-def render_execution_header(summary: Mapping[str, str]) -> None:
-    console = get_console()
+def build_execution_header(summary: Mapping[str, str]) -> Panel:
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_column(style="label", no_wrap=True, justify="right")
     table.add_column(style="value")
     for key, value in summary.items():
         table.add_row(Text(str(key), style="label"), Text(str(value), style="value"))
-    panel = Panel(
+    return Panel(
         Group(table),
         title=Text("Execution", style="step"),
         title_align="left",
@@ -287,7 +286,11 @@ def render_execution_header(summary: Mapping[str, str]) -> None:
         padding=(0, 2),
         expand=True,
     )
-    console.print(panel)
+
+
+def render_execution_header(summary: Mapping[str, str]) -> None:
+    console = get_console()
+    console.print(build_execution_header(summary))
     console.print()
 
 
@@ -299,10 +302,19 @@ def render_checkpoint_table(row: Mapping[str, str]) -> Table:
     return table
 
 
-def render_batch_checkpoint(row: Mapping[str, str]) -> None:
-    console = get_console()
+def build_batch_checkpoint(row: Mapping[str, str] | None) -> Panel:
+    if row is None:
+        row = {
+            "Batch": "—",
+            "Trials": "—",
+            "Modes": "—",
+            "JS": "—",
+            "New": "—",
+            "CI HW": "—",
+            "Stop": "—",
+        }
     table = render_checkpoint_table(row)
-    panel = Panel(
+    return Panel(
         table,
         title=Text("BATCH CHECKPOINT", style="step"),
         title_align="left",
@@ -310,7 +322,11 @@ def render_batch_checkpoint(row: Mapping[str, str]) -> None:
         padding=(0, 2),
         expand=True,
     )
-    console.print(panel)
+
+
+def render_batch_checkpoint(row: Mapping[str, str]) -> None:
+    console = get_console()
+    console.print(build_batch_checkpoint(row))
 
 
 def render_receipt_panel(
@@ -333,7 +349,7 @@ def render_receipt_panel(
         for mode_id, share, exemplar in top_modes:
             mode_lines.append(Text(f"{mode_id} · {share:.3f} · {exemplar}", style="value"))
     else:
-        mode_lines.append(Text("n/a", style="dim"))
+        mode_lines.append(Text("n/a", style="label"))
 
     checkpoint_table = None
     if checkpoints:
@@ -350,7 +366,7 @@ def render_receipt_panel(
     group_items.extend([Text(""), Text("Top Modes", style="subtitle"), *mode_lines])
     if checkpoint_table:
         group_items.extend([Text(""), Text("Last Checkpoints", style="subtitle"), checkpoint_table])
-    group_items.extend([Text(""), Text(f"Artifacts: {artifact_path}", style="dim")])
+    group_items.extend([Text(""), Text(f"Artifacts: {artifact_path}", style="label")])
 
     panel = Panel(
         Group(*group_items),
