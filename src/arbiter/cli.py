@@ -42,12 +42,16 @@ from arbiter.ui.render import (
     render_success,
     render_summary_table,
     render_warning,
+    render_validation_panel,
 )
 from arbiter.wizard import WizardState, run_wizard as run_wizard_flow
+from arbiter.validation import load_and_validate_config
 
 app = typer.Typer(add_completion=False, help="Research harness for ensemble reasoning.")
 llm_app = typer.Typer(add_completion=False, help="LLM utilities and diagnostics.")
+config_app = typer.Typer(add_completion=False, help="Config helpers and validation.")
 app.add_typer(llm_app, name="llm")
+app.add_typer(config_app, name="config")
 
 
 @app.callback(invoke_without_command=True)
@@ -243,6 +247,28 @@ def run_wizard() -> None:
     if execution_result.stop_reason in {"parse_failure", "llm_error", "budget_exhausted"}:
         render_error("Execution stopped due to errors. Review metrics.json for details.")
         raise typer.Exit(code=1)
+
+
+@config_app.command("validate")
+def config_validate(path: str = typer.Option("arbiter.config.json", "--path", "-p")) -> None:
+    """Validate a canonical config file without executing a run."""
+    config_path = Path(path)
+    default_model = os.getenv("ARBITER_DEFAULT_MODEL", "openai/gpt-5")
+    api_key_present = bool(os.getenv("OPENROUTER_API_KEY"))
+    llm_mode = "remote" if api_key_present else "mock"
+    result = load_and_validate_config(config_path, default_model=default_model, llm_mode=llm_mode)
+
+    errors = [f"{issue.path}: {issue.message}" for issue in result.errors]
+    warnings = [f"{issue.path}: {issue.message}" for issue in result.warnings]
+
+    if errors:
+        render_validation_panel("INVALID", errors, style="error")
+        raise typer.Exit(code=1)
+
+    if warnings:
+        render_validation_panel("VALID (with warnings)", warnings, style="warning")
+    else:
+        render_validation_panel("VALID", ["No issues found."], style="success")
 
 
 @llm_app.command("dry-run")

@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from pathlib import Path
 from typing import Any, Callable
 
 import typer
 
-from arbiter.config import default_canonical_config, normalize_canonical_config
+from arbiter.config import default_canonical_config
 from arbiter.ui.render import (
     render_error,
     render_info,
@@ -19,6 +18,7 @@ from arbiter.ui.render import (
     render_warning,
 )
 from arbiter.storage import write_json
+from arbiter.validation import load_and_validate_config
 from arbiter.wizard.state import WizardState
 
 
@@ -111,13 +111,20 @@ def _prompt_yes_no(prompt: str, default: bool = False) -> bool:
 
 
 def _load_config_file(path: Path, state: WizardState) -> dict[str, Any]:
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Invalid JSON config: {exc}") from exc
-    if not isinstance(raw, dict):
-        raise ValueError("Config must be a JSON object.")
-    return normalize_canonical_config(raw, default_model=state.default_model, llm_mode=_default_llm_mode(state))
+    result = load_and_validate_config(
+        path,
+        default_model=state.default_model,
+        llm_mode=_default_llm_mode(state),
+    )
+    if result.errors:
+        message_lines = [f"{issue.path}: {issue.message}" for issue in result.errors]
+        raise ValueError("Invalid config\n" + "\n".join(message_lines))
+    if result.warnings:
+        warning_lines = [f"{issue.path}: {issue.message}" for issue in result.warnings]
+        render_warning("Config warnings:\n" + "\n".join(warning_lines))
+    if result.config is None:
+        raise ValueError("Failed to load config.")
+    return result.config
 
 
 def _default_llm_mode(state: WizardState) -> str:
@@ -142,16 +149,35 @@ def step_config_mode(state: WizardState) -> None:
             state.input_config = _load_config_file(state.config_path, state)
         except ValueError as exc:
             render_error(str(exc))
-            return step_config_mode(state)
-        state.config_mode = "load"
+            action = _prompt_choice("Config invalid. Choose next step", ["guided", "exit"], "guided")
+            if action == "exit":
+                raise typer.Exit(code=1)
+            state.input_config = default_canonical_config(
+                default_model=state.default_model,
+                llm_mode=_default_llm_mode(state),
+            )
+            state.config_mode = "guided"
+        else:
+            state.config_mode = "load"
     elif selection == "create":
-        state.input_config = default_canonical_config(
-            default_model=state.default_model,
-            llm_mode=_default_llm_mode(state),
-        )
-        write_json(state.config_path, state.input_config)
-        render_info(f"Wrote template config to {state.config_path}.")
-        state.config_mode = "load"
+        example_path = Path("arbiter.config.example.json")
+        if example_path.exists():
+            if state.config_path.exists():
+                overwrite = _prompt_yes_no("arbiter.config.json exists. Overwrite?", default=False)
+                if not overwrite:
+                    return step_config_mode(state)
+            state.config_path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+            render_info(f"Wrote template config to {state.config_path}. Edit it, then rerun `arbiter run` and choose load.")
+            raise typer.Exit(code=0)
+        else:
+            render_warning("arbiter.config.example.json not found; using default template.")
+            state.input_config = default_canonical_config(
+                default_model=state.default_model,
+                llm_mode=_default_llm_mode(state),
+            )
+            write_json(state.config_path, state.input_config)
+            render_info(f"Wrote template config to {state.config_path}. Edit it, then rerun `arbiter run` and choose load.")
+            raise typer.Exit(code=0)
     else:
         state.input_config = default_canonical_config(
             default_model=state.default_model,

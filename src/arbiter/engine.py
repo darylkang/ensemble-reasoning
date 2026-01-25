@@ -29,6 +29,7 @@ class WorkItem:
     retries_used: int
     atom: QAtom
     temperature: float
+    temperature_policy: dict[str, Any]
     messages: list[dict[str, Any]]
 
 
@@ -38,6 +39,7 @@ class PendingRetry:
     retries_used: int
     atom: QAtom
     temperature: float
+    temperature_policy: dict[str, Any]
     messages: list[dict[str, Any]]
 
 
@@ -102,6 +104,7 @@ async def execute_trials(
     batch_size = max(1, execution.batch_size)
     max_retries = max(0, execution.max_retries)
     convergence = execution.convergence
+    temperature_policy_payload = _temperature_policy_payload(semantic.temperature_policy)
 
     rng_seed = random.randrange(2**32)
     rng = random.Random(rng_seed)
@@ -193,6 +196,7 @@ async def execute_trials(
                                 retries_used=retry.retries_used,
                                 atom=retry.atom,
                                 temperature=retry.temperature,
+                                temperature_policy=retry.temperature_policy,
                                 messages=retry.messages,
                             )
                         )
@@ -208,6 +212,7 @@ async def execute_trials(
                             retries_used=0,
                             atom=atom,
                             temperature=temperature,
+                            temperature_policy=temperature_policy_payload,
                             messages=messages,
                         )
                     )
@@ -242,6 +247,7 @@ async def execute_trials(
                                         retries_used=outcome.retries_used + 1,
                                         atom=outcome.atom,
                                         temperature=outcome.trial_record.get("temperature", outcome.atom.temperature),
+                                        temperature_policy=outcome.trial_record.get("temperature_policy", temperature_policy_payload),
                                         messages=outcome.retry_messages,
                                     )
                                 )
@@ -479,6 +485,8 @@ async def _execute_one_trial(
         "atom_id": item.atom.atom_id,
         "model": item.atom.model,
         "temperature": item.temperature,
+        "temperature_used": item.temperature,
+        "temperature_policy": item.temperature_policy,
         "persona_id": item.atom.persona_id,
         "question_hash": question_hash,
         "retries_used": item.retries_used,
@@ -766,6 +774,20 @@ def _sample_temperature(rng: random.Random, policy: Any, fallback: float) -> flo
             return rng.choice(temperatures)
         return temperatures[0]
     return fallback
+
+
+def _temperature_policy_payload(policy: Any) -> dict[str, Any]:
+    kind = getattr(policy, "kind", "fixed")
+    temperatures = list(getattr(policy, "temperatures", []) or [])
+    if kind == "range" and len(temperatures) >= 2:
+        low, high = temperatures[0], temperatures[1]
+        if high < low:
+            low, high = high, low
+        return {"type": "range", "min": low, "max": high}
+    if kind == "list":
+        return {"type": "list", "values": temperatures}
+    value = temperatures[0] if temperatures else None
+    return {"type": "fixed", "value": value}
 
 
 def _worker_description(worker_id: int, completed: int, atom: QAtom | None) -> str:

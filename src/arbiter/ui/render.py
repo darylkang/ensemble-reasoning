@@ -121,3 +121,18 @@ def render_summary_table(rows: Mapping[str, str] | Sequence[tuple[str, str]], ti
     )
     console.print()
     console.print(panel)
+
+
+def render_validation_panel(title: str, issues: Sequence[str], *, style: str) -> None:
+    console = get_console()
+    lines = [Text(title, style="step")]
+    for issue in issues:
+        lines.append(Text(f"- {issue}", style=style))
+    panel = Panel(
+        Group(*lines),
+        box=box.ROUNDED,
+        border_style=style,
+        padding=(0, 2),
+        expand=True,
+    )
+    console.print(panel)
