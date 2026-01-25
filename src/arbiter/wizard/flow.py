@@ -25,6 +25,8 @@ def run_wizard(state: WizardState) -> WizardState:
 
 def _next_step(state: WizardState, step_id: str) -> str | None:
     if step_id == "welcome":
+        return "mode_select"
+    if step_id == "mode_select":
         return "config_mode"
     if step_id == "config_mode":
         if state.config_mode == "guided":

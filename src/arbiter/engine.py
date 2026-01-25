@@ -826,10 +826,12 @@ def _render_execution_header(
         if convergence.epsilon_ci_half_width is not None
         else "off"
     )
+    mode_label = _mode_label(semantic.llm.mode)
     summary = {
         "Run ID": resolved_config.run.run_id,
         "Started": resolved_config.run.started_at,
         "Question": _truncate_text(question_text, 80),
+        "Mode": mode_label,
         "Protocol": protocol,
         "Models": models,
         "Personas": personas,
@@ -854,6 +856,12 @@ def _format_temperature_policy(policy: Any) -> str:
     if values:
         return f"fixed {values[0]:.2f}"
     return "fixed"
+
+
+def _mode_label(mode: str) -> str:
+    if mode == "mock":
+        return "mock (no network calls)"
+    return "remote (OpenRouter)"
 
 
 def _truncate_text(text: str, limit: int) -> str:

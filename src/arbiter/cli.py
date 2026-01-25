@@ -73,6 +73,7 @@ def run_wizard() -> None:
         default_model=default_model,
         api_key_present=api_key_present,
         config_path=Path("arbiter.config.json"),
+        selected_mode="remote" if api_key_present else "mock",
     )
     state = run_wizard_flow(state)
 

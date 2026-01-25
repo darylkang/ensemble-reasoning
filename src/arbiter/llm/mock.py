@@ -16,8 +16,8 @@ class MockClient:
     def __init__(
         self,
         *,
-        latency_ms: int = 15,
-        jitter_ms: int = 10,
+        latency_ms: int = 120,
+        jitter_ms: int = 130,
         error_rate: float = 0.0,
         default_routing: dict[str, Any] | None = None,
     ) -> None:

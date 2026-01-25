@@ -31,17 +31,31 @@ def render_welcome_panel(
     *,
     title: str,
     subtitle: str,
-    environment: str,
-    config_status: str,
+    status_mode: str,
+    status_openrouter: str,
+    status_config: str,
     recommendation: str,
     action: str,
 ) -> None:
     console = get_console()
+    status = Text()
+    status.append("MODE ", style="dim")
+    status.append(status_mode, style="accent")
+    status.append("   OPENROUTER ", style="dim")
+    status.append(
+        status_openrouter,
+        style="success" if status_openrouter == "CONNECTED" else "warning",
+    )
+    status.append("   CONFIG ", style="dim")
+    status.append(
+        status_config,
+        style="success" if status_config == "FOUND" else "warning",
+    )
+
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_column(style="label", no_wrap=True, justify="right")
     table.add_column(style="value")
-    table.add_row("Environment", environment)
-    table.add_row("Config", config_status)
+    table.add_row("Status", status)
     table.add_row("Recommended", recommendation)
 
     panel = Panel(
@@ -60,6 +74,34 @@ def render_welcome_panel(
     )
     console.print(panel)
     console.print()
+
+
+def render_mode_select_panel(
+    *,
+    title: str,
+    description: str,
+    options: Sequence[tuple[str, str, bool]],
+    instructions: str,
+    note: str | None = None,
+) -> None:
+    console = get_console()
+    lines = [Text(title, style="step"), Text(description, style="subtitle"), Text("")]
+    for index, (label, state, enabled) in enumerate(options, start=1):
+        marker = "[x]" if state == "selected" else "[ ]"
+        style = "value" if enabled else "disabled"
+        lines.append(Text(f"{index:>2} {marker} {label}", style=style))
+    lines.append(Text(""))
+    lines.append(Text(instructions, style="dim"))
+    if note:
+        lines.append(Text(note, style="dim"))
+    panel = Panel(
+        Group(*lines),
+        box=box.ROUNDED,
+        border_style="border",
+        padding=(0, 2),
+        expand=True,
+    )
+    console.print(panel)
 
 
 def render_step_header(step_idx: int, step_total: int, title: str, description: str) -> None:

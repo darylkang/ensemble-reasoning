@@ -14,14 +14,15 @@ class WizardState:
     config_path: Path
     config_mode: str | None = None
     input_config: dict[str, Any] = field(default_factory=dict)
-    step_order: list[str] = field(default_factory=lambda: ["welcome", "config_mode"])
+    step_order: list[str] = field(default_factory=lambda: ["welcome", "mode_select", "config_mode"])
     save_config: bool = False
     run_name: str = "auto"
     output_base_dir: Path = field(default_factory=lambda: Path("./runs"))
     use_advanced: bool = False
+    selected_mode: str = "mock"
 
     def compute_step_order(self) -> None:
-        steps = ["welcome", "config_mode"]
+        steps = ["welcome", "mode_select", "config_mode"]
         missing_question = not (self.input_config.get("question", {}) or {}).get("text")
         if self.config_mode == "guided":
             steps.extend(

@@ -12,6 +12,7 @@ THEME = Theme(
         "dim": "grey50",
         "step": "bold gold3",
         "info": "grey70",
+        "disabled": "grey50",
         "warning": "orange3",
         "success": "green3",
         "error": "red3",
