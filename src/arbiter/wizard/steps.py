@@ -49,7 +49,10 @@ def run_step(step_id: str, state: WizardState) -> None:
     console = get_console()
     if step.step_id != "welcome" and not step.custom_surface:
         index, total = state.step_index(step.step_id)
-        render_step_header(index, total, step.title, step.description)
+        if step.step_id in {"config_mode"}:
+            render_step_header(None, None, step.title, step.description)
+        else:
+            render_step_header(index, total, step.title, step.description)
     step.handler(state)
     console.print()
 
@@ -201,12 +204,16 @@ def _default_llm_mode(state: WizardState) -> str:
 def step_welcome(state: WizardState) -> None:
     config_exists = state.config_path.exists()
     config_status = "FOUND" if config_exists else "NOT FOUND"
-    recommendation = "Load config" if config_exists else "Use guided wizard or create template"
+    recommendation = "Load config (recommended)" if config_exists else "Guided wizard or create template"
     default_mode = "remote" if state.api_key_present else "mock"
     state.selected_mode = state.selected_mode or default_mode
 
     remote_enabled = state.api_key_present
-    note = None if remote_enabled else "Set OPENROUTER_API_KEY (in .env or env) to enable remote."
+    note = (
+        None
+        if remote_enabled
+        else "To enable Remote, set OPENROUTER_API_KEY in .env (or your environment)."
+    )
     while True:
         mode_options = [
             ("Mock (no network calls)", True, state.selected_mode == "mock"),
@@ -219,8 +226,8 @@ def step_welcome(state: WizardState) -> None:
             ),
         ]
         render_welcome_panel(
-            title="Arbiter",
-            subtitle="Ensemble reasoning run setup",
+            title="Welcome",
+            subtitle="Ensemble Reasoning · Run Setup",
             status_mode=state.selected_mode.upper(),
             status_openrouter="CONNECTED" if remote_enabled else "MISSING KEY",
             status_config=config_status,
@@ -337,7 +344,7 @@ def step_personas(state: WizardState) -> None:
     selected = set(existing)
     index, total = state.step_index("personas")
     selection = _multi_select(
-        step_label=f"Step {index}/{total} · Persona mix",
+        step_label=f"Step {index}/{total} · Persona Mix",
         description="Select personas to include.",
         options=options,
         selected=selected,
@@ -357,7 +364,7 @@ def step_models(state: WizardState) -> None:
     selected = set(existing)
     index, total = state.step_index("models")
     selection = _multi_select(
-        step_label=f"Step {index}/{total} · Model mix",
+        step_label=f"Step {index}/{total} · Model Mix",
         description="Select models to include.",
         options=options,
         selected=selected,

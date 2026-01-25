@@ -47,5 +47,9 @@ class WizardState:
     def step_index(self, step_id: str) -> tuple[int, int]:
         if step_id not in self.step_order:
             self.step_order.append(step_id)
-        index = self.step_order.index(step_id) + 1
-        return index, len(self.step_order)
+        preflight = {"welcome", "config_mode"}
+        numbered = [step for step in self.step_order if step not in preflight]
+        if step_id in preflight:
+            return 0, len(numbered)
+        index = numbered.index(step_id) + 1
+        return index, len(numbered)

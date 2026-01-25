@@ -17,7 +17,9 @@ from arbiter.ui.console import get_console
 def render_banner(title: str, subtitle: str) -> None:
     console = get_console()
     panel = Panel(
-        Group(Text(title, style="title"), Text(subtitle, style="subtitle")),
+        Group(Text(subtitle, style="subtitle")),
+        title=Text(title, style="step"),
+        title_align="left",
         box=box.ROUNDED,
         border_style="border",
         padding=(0, 2),
@@ -58,7 +60,7 @@ def render_welcome_panel(
     table.add_column(style="label", no_wrap=True, justify="right")
     table.add_column(style="value")
     table.add_row("Status", status)
-    table.add_row("Recommended", recommendation)
+    table.add_row("Next", recommendation)
 
     mode_lines = [Text("Mode", style="label")]
     for index, (label, enabled, selected) in enumerate(mode_options, start=1):
@@ -68,7 +70,6 @@ def render_welcome_panel(
 
     panel = Panel(
         Group(
-            Text(title, style="title"),
             Text(subtitle, style="subtitle"),
             Text(""),
             table,
@@ -78,6 +79,8 @@ def render_welcome_panel(
             Text(action, style="dim"),
             Text(note, style="dim") if note else Text(""),
         ),
+        title=Text(title, style="step"),
+        title_align="left",
         box=box.ROUNDED,
         border_style="border",
         padding=(0, 2),
@@ -96,7 +99,7 @@ def render_mode_select_panel(
     note: str | None = None,
 ) -> None:
     console = get_console()
-    lines = [Text(title, style="step"), Text(description, style="subtitle"), Text("")]
+    lines = [Text(description, style="subtitle"), Text("")]
     for index, (label, state, enabled) in enumerate(options, start=1):
         marker = "[x]" if state == "selected" else "[ ]"
         style = "value" if enabled else "disabled"
@@ -107,6 +110,8 @@ def render_mode_select_panel(
         lines.append(Text(note, style="dim"))
     panel = Panel(
         Group(*lines),
+        title=Text(title, style="step"),
+        title_align="left",
         box=box.ROUNDED,
         border_style="border",
         padding=(0, 2),
@@ -115,14 +120,24 @@ def render_mode_select_panel(
     console.print(panel)
 
 
-def render_step_header(step_idx: int, step_total: int, title: str, description: str) -> None:
+def render_step_header(
+    step_idx: int | None,
+    step_total: int | None,
+    title: str,
+    description: str,
+) -> None:
     console = get_console()
-    header = Text(f"Step {step_idx}/{step_total} · {title}", style="step")
-    content = [header]
+    if step_idx is not None and step_total is not None:
+        panel_title = f"Step {step_idx}/{step_total} · {title}"
+    else:
+        panel_title = title
+    content = []
     if description:
         content.append(Text(description, style="subtitle"))
     panel = Panel(
         Group(*content),
+        title=Text(panel_title, style="step"),
+        title_align="left",
         box=box.ROUNDED,
         border_style="border",
         padding=(0, 2),
@@ -213,11 +228,13 @@ def render_summary_table(rows: Mapping[str, str] | Sequence[tuple[str, str]], ti
 
 def render_validation_panel(title: str, issues: Sequence[str], *, style: str) -> None:
     console = get_console()
-    lines = [Text(title, style="step")]
+    lines = []
     for issue in issues:
         lines.append(Text(f"- {issue}", style=style))
     panel = Panel(
         Group(*lines),
+        title=Text(title, style="step"),
+        title_align="left",
         box=box.ROUNDED,
         border_style="border",
         padding=(0, 2),
@@ -235,16 +252,17 @@ def render_selection_panel(
     instructions: str,
 ) -> None:
     console = get_console()
-    header = Text(title, style="step")
     desc = Text(description, style="subtitle")
     rows = []
     selected_set = set(selected)
     for index, option in enumerate(options, start=1):
         marker = "[x]" if option in selected_set else "[ ]"
         rows.append(Text(f"{index:>2} {marker} {option}", style="value"))
-    body = Group(header, desc, Text(""), *rows, Text(""), Text(instructions, style="dim"))
+    body = Group(desc, Text(""), *rows, Text(""), Text(instructions, style="dim"))
     panel = Panel(
         body,
+        title=Text(title, style="step"),
+        title_align="left",
         box=box.ROUNDED,
         border_style="border",
         padding=(0, 2),
@@ -261,7 +279,9 @@ def render_execution_header(summary: Mapping[str, str]) -> None:
     for key, value in summary.items():
         table.add_row(Text(str(key), style="label"), Text(str(value), style="value"))
     panel = Panel(
-        Group(Text("Execution", style="step"), Text(""), table),
+        Group(table),
+        title=Text("Execution", style="step"),
+        title_align="left",
         box=box.ROUNDED,
         border_style="border",
         padding=(0, 2),
@@ -271,12 +291,17 @@ def render_execution_header(summary: Mapping[str, str]) -> None:
     console.print()
 
 
-def render_batch_checkpoint(row: Mapping[str, str]) -> None:
-    console = get_console()
-    table = Table(show_header=True, box=box.ROUNDED, pad_edge=False)
+def render_checkpoint_table(row: Mapping[str, str]) -> Table:
+    table = Table(show_header=True, box=None, pad_edge=False)
     for key in row.keys():
         table.add_column(str(key), style="label", no_wrap=True)
     table.add_row(*[str(value) for value in row.values()])
+    return table
+
+
+def render_batch_checkpoint(row: Mapping[str, str]) -> None:
+    console = get_console()
+    table = render_checkpoint_table(row)
     panel = Panel(
         table,
         title=Text("BATCH CHECKPOINT", style="step"),
@@ -312,18 +337,14 @@ def render_receipt_panel(
 
     checkpoint_table = None
     if checkpoints:
-        checkpoint_table = Table(show_header=True, box=box.ROUNDED, pad_edge=False)
+        checkpoint_table = Table(show_header=True, box=None, pad_edge=False)
         headers = list(checkpoints[0].keys())
         for header in headers:
             checkpoint_table.add_column(str(header), style="label", no_wrap=True)
         for row in checkpoints:
             checkpoint_table.add_row(*[str(row.get(header, "")) for header in headers])
 
-    group_items = [
-        Text(title, style="step"),
-        Text(""),
-        table,
-    ]
+    group_items = [table]
     if stop_explanation:
         group_items.extend([Text(""), Text(stop_explanation, style="subtitle")])
     group_items.extend([Text(""), Text("Top Modes", style="subtitle"), *mode_lines])
@@ -333,6 +354,8 @@ def render_receipt_panel(
 
     panel = Panel(
         Group(*group_items),
+        title=Text(title, style="step"),
+        title_align="left",
         box=box.ROUNDED,
         border_style="border",
         padding=(0, 2),

@@ -98,11 +98,12 @@ def run_wizard() -> None:
         api_key_present=api_key_present,
     )
 
-    step_total = len(state.step_order) + 2
+    numbered_steps = [step for step in state.step_order if step not in {"welcome", "config_mode"}]
+    step_total = len(numbered_steps) + 2
     render_step_header(
-        len(state.step_order) + 1,
+        len(numbered_steps) + 1,
         step_total,
-        "Resolve configuration",
+        "Resolve Configuration",
         "Materialize Q(c) and write run artifacts.",
     )
     with status_spinner("Materializing Q(c)"):
@@ -178,9 +179,9 @@ def run_wizard() -> None:
     render_gap(after_prompt=False)
 
     render_step_header(
-        len(state.step_order) + 2,
+        len(numbered_steps) + 2,
         step_total,
-        "Execute trials",
+        "Execute Trials",
         "Run batched trials with convergence checks.",
     )
     execution_result = None
@@ -247,7 +248,6 @@ def run_wizard() -> None:
         stop_explanation=stop_explanation,
         artifact_path=str(run_dir),
     )
-    render_info(f"Artifacts written to {run_dir}")
 
     if execution_result.stop_reason in {"parse_failure", "llm_error", "budget_exhausted"}:
         render_error("Execution stopped due to errors. Review metrics.json for details.")
@@ -280,7 +280,7 @@ def config_validate(path: str = typer.Option("arbiter.config.json", "--path", "-
 def llm_dry_run() -> None:
     """Build and display an OpenRouter request body without network access."""
     default_model = os.getenv("ARBITER_DEFAULT_MODEL", "openai/gpt-5")
-    render_banner("arbiter", "LLM dry-run request preview")
+    render_banner("LLM Dry-Run", "Request Preview")
     default_routing = {"allow_fallbacks": False}
 
     cases = [
