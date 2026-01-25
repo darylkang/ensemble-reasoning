@@ -59,11 +59,9 @@ def root(ctx: typer.Context) -> None:
     """Arbiter research harness CLI."""
     load_dotenv()
     if ctx.invoked_subcommand is None:
-        typer.echo(ctx.get_help())
-        raise typer.Exit(code=0)
+        run_wizard()
 
 
-@app.command("run")
 def run_wizard() -> None:
     """Interactive wizard to create a run folder and resolved config."""
     started_at = datetime.now(timezone.utc)

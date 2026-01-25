@@ -283,7 +283,7 @@ def step_config_mode(state: WizardState) -> None:
                 if not overwrite:
                     return step_config_mode(state)
             state.config_path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
-            render_info(f"Wrote template config to {state.config_path}. Edit it, then rerun `arbiter run` and choose load.")
+            render_info(f"Wrote template config to {state.config_path}. Edit it, then rerun `arbiter` and choose load.")
             raise typer.Exit(code=0)
         else:
             render_warning("arbiter.config.example.json not found; using default template.")
@@ -292,7 +292,7 @@ def step_config_mode(state: WizardState) -> None:
                 llm_mode=_default_llm_mode(state),
             )
             write_json(state.config_path, state.input_config)
-            render_info(f"Wrote template config to {state.config_path}. Edit it, then rerun `arbiter run` and choose load.")
+            render_info(f"Wrote template config to {state.config_path}. Edit it, then rerun `arbiter` and choose load.")
             raise typer.Exit(code=0)
     else:
         state.input_config = default_canonical_config(

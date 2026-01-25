@@ -11,7 +11,7 @@ The key framing is explicit configuration sampling `Q(c)` and the induced distri
 - Not a simulation of human populations or juries.
 
 ## Current status
-- `arbiter run` executes single-question runs with OpenRouter (or mock when no key is present).
+- `arbiter` executes single-question runs with OpenRouter (or mock when no key is present).
 - The artifact bundle and clustering outputs are evolving toward the full contract in `docs/spec.md`.
 - `runs/` is generated output and should remain untracked/ignored.
 
@@ -46,7 +46,7 @@ python -m pip install "git+https://github.com/darylkang/ensemble-reasoning.git@m
 ```
 
 ## Run
-`arbiter run` launches a decision-tree wizard:
+`arbiter` launches a decision-tree wizard:
 
 1) Welcome + environment check (OpenRouter key, remote vs mock)
 2) Config mode selection (load `arbiter.config.json` or guided build)
@@ -62,7 +62,7 @@ Runs write a folder under `./runs` following the artifact contract in `docs/spec
 
 ```bash
 arbiter --help
-arbiter run
+arbiter
 arbiter llm dry-run
 ```
 
