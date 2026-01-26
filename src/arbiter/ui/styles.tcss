@@ -27,8 +27,16 @@ Screen {
   height: 8;
 }
 
-#execution-workers, #execution-checkpoint, #review-summary, #receipt {
+#execution-workers, #review-summary, #receipt {
   height: auto;
+  margin-top: 1;
+}
+
+#execution-checkpoint {
+  height: auto;
+}
+
+#welcome-note {
   margin-top: 1;
 }
 

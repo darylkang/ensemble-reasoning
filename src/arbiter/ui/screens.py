@@ -44,6 +44,8 @@ class WelcomeScreen(BaseScreen):
             yield Label("Ensemble Reasoning · Run Setup", id="welcome-subtitle")
             status = _status_line(self.state)
             yield Static(status, id="welcome-status")
+            self.note = Static("", id="welcome-note")
+            yield self.note
             self.mode_list = OptionList(
                 "Mock (no network calls)",
                 "Remote (OpenRouter)",
@@ -58,6 +60,7 @@ class WelcomeScreen(BaseScreen):
             self.mode_list.clear_options()
             self.mode_list.add_option("Mock (no network calls)")
             self.mode_list.add_option("Remote (requires OPENROUTER_API_KEY)")
+            self.note.update("To enable Remote, set OPENROUTER_API_KEY in .env (or your environment).")
         index = 1 if self.state.selected_mode == "remote" else 0
         self.mode_list.highlighted = index
 
@@ -77,16 +80,22 @@ class ConfigScreen(BaseScreen):
         with surface:
             self.message = Static("", id="config-message")
             yield self.message
-            options = ["Load config", "Guided wizard", "Create template & exit"]
-            self.list = OptionList(*options, id="config-list")
+            self.list = OptionList("Load config", "Guided wizard", "Create template & exit", id="config-list")
             yield self.list
             yield Static("Press Enter to continue", id="config-hint")
         yield _footer_hint()
 
     def on_mount(self) -> None:
+        self.list.clear_options()
         if self.state.config_path.exists():
+            self.list.add_option("Load config (recommended)")
+            self.list.add_option("Guided wizard")
+            self.list.add_option("Create template & exit")
             self.list.highlighted = 0
         else:
+            self.list.add_option("Load config")
+            self.list.add_option("Guided wizard")
+            self.list.add_option("Create template & exit")
             self.list.highlighted = 1
 
     def action_continue(self) -> None:
@@ -142,7 +151,7 @@ class QuestionScreen(BaseScreen):
         surface = Container(id="question-surface", classes="surface")
         surface.border_title = "Question"
         with surface:
-            yield Static("Paste question. End with an empty line.", id="question-hint")
+            yield Static("Paste question. Press Ctrl+Enter to continue.", id="question-hint")
             self.text_area = TextArea(id="question-input")
             yield self.text_area
             yield Button("Continue", id="question-continue")
@@ -175,7 +184,7 @@ class RunModeScreen(BaseScreen):
         surface = Container(id="runmode-surface", classes="surface")
         surface.border_title = "Run Mode"
         with surface:
-            yield Static("Choose Quick Run or Customize.", id="runmode-hint")
+            yield Static("Quick Run uses recommended defaults.", id="runmode-hint")
             self.list = OptionList("Quick Run (recommended)", "Customize settings", id="runmode-list")
             yield self.list
         yield _footer_hint()
@@ -201,6 +210,7 @@ class DecodeScreen(BaseScreen):
             yield Input(placeholder="Temperature (fixed)", id="temp-fixed")
             yield Input(placeholder="Temperature min", id="temp-min")
             yield Input(placeholder="Temperature max", id="temp-max")
+            yield Input(placeholder="Extra decode params (JSON)", id="decode-extra")
             yield Button("Continue", id="decode-continue")
         yield _footer_hint()
 
@@ -226,6 +236,14 @@ class DecodeScreen(BaseScreen):
             if temp_max < temp_min:
                 temp_min, temp_max = temp_max, temp_min
             decode["temperature"] = {"type": "range", "min": temp_min, "max": temp_max}
+        extra_raw = self.query_one("#decode-extra", Input).value.strip()
+        if extra_raw:
+            try:
+                extra = json.loads(extra_raw)
+            except json.JSONDecodeError:
+                extra = {}
+            if isinstance(extra, dict):
+                decode["extra"] = extra
         decode.setdefault("extra", {})
         self.app.show_personas()
 
@@ -324,12 +342,19 @@ class ProtocolScreen(BaseScreen):
         surface = Container(id="protocol-surface", classes="surface")
         surface.border_title = "Protocol"
         with surface:
-            yield Static("Independent protocol only.", id="protocol-hint")
+            self.message = Static("Select the protocol to apply.", id="protocol-hint")
+            yield self.message
+            self.list = OptionList("Independent (supported)", "Interaction (coming soon)", id="protocol-list")
+            yield self.list
             yield Button("Continue", id="protocol-continue")
         yield _footer_hint()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "protocol-continue":
+            choice = self.list.highlighted or 0
+            if choice == 1:
+                self.message.update("Interaction protocol is not available yet.")
+                return
             protocol = self.state.input_config.setdefault("protocol", {})
             protocol["type"] = "independent"
             self.app.show_advanced_gate()
@@ -367,6 +392,8 @@ class AdvancedScreen(BaseScreen):
             yield Input(placeholder="Workers (W)", id="adv-workers")
             yield Input(placeholder="Batch size (B)", id="adv-batch")
             yield Input(placeholder="Max retries", id="adv-retries")
+            yield Input(placeholder="Seed (optional)", id="adv-seed")
+            yield Input(placeholder="Parse failure policy (continue|halt)", id="adv-parse")
             yield Input(placeholder="delta_js", id="adv-delta")
             yield Input(placeholder="epsilon_new", id="adv-epsilon-new")
             yield Input(placeholder="epsilon_ci", id="adv-epsilon-ci")
@@ -375,8 +402,40 @@ class AdvancedScreen(BaseScreen):
             yield Input(placeholder="clustering method", id="adv-cluster-method")
             yield Input(placeholder="clustering tau", id="adv-cluster-tau")
             yield Input(placeholder="embed_text", id="adv-embed-text")
+            yield Static("Embedding model (locked)", id="adv-embed-model")
+            yield Static("Summarizer model (locked)", id="adv-summarizer")
             yield Button("Continue", id="advanced-continue")
         yield _footer_hint()
+
+    def on_mount(self) -> None:
+        execution = self.state.input_config.get("execution", {})
+        convergence = self.state.input_config.get("convergence", {})
+        clustering = self.state.input_config.get("clustering", {})
+        summarizer = self.state.input_config.get("summarizer", {})
+
+        self.query_one("#adv-kmax", Input).value = str(execution.get("k_max", 1000))
+        self.query_one("#adv-workers", Input).value = str(execution.get("workers", 8))
+        self.query_one("#adv-batch", Input).value = str(execution.get("batch_size", execution.get("workers", 8)))
+        self.query_one("#adv-retries", Input).value = str(execution.get("retries", 2))
+        seed_val = execution.get("seed")
+        self.query_one("#adv-seed", Input).value = "" if seed_val is None else str(seed_val)
+        self.query_one("#adv-parse", Input).value = str(execution.get("parse_failure_policy", "continue"))
+
+        self.query_one("#adv-delta", Input).value = str(convergence.get("delta_js_threshold", 0.02))
+        self.query_one("#adv-epsilon-new", Input).value = str(convergence.get("epsilon_new_threshold", 0.01))
+        epsilon_ci = convergence.get("epsilon_ci_half_width", 0.05)
+        self.query_one("#adv-epsilon-ci", Input).value = "" if epsilon_ci is None else str(epsilon_ci)
+        self.query_one("#adv-min", Input).value = str(convergence.get("min_trials", 64))
+        self.query_one("#adv-patience", Input).value = str(convergence.get("patience_batches", 2))
+
+        self.query_one("#adv-cluster-method", Input).value = str(clustering.get("method", "leader"))
+        self.query_one("#adv-cluster-tau", Input).value = str(clustering.get("tau", 0.85))
+        self.query_one("#adv-embed-text", Input).value = str(clustering.get("embed_text", "outcome"))
+
+        embedding_model = clustering.get("embedding_model", "n/a")
+        summarizer_model = summarizer.get("model", "n/a")
+        self.query_one("#adv-embed-model", Static).update(f"Embedding model (locked): {embedding_model}")
+        self.query_one("#adv-summarizer", Static).update(f"Summarizer model (locked): {summarizer_model}")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "advanced-continue":
@@ -388,14 +447,24 @@ class AdvancedScreen(BaseScreen):
             execution["workers"] = _int_or_default(self.query_one("#adv-workers", Input).value, 8)
             execution["batch_size"] = _int_or_default(self.query_one("#adv-batch", Input).value, execution["workers"])
             execution["retries"] = _int_or_default(self.query_one("#adv-retries", Input).value, 2)
+            seed_value = _optional_int(self.query_one("#adv-seed", Input).value)
+            if seed_value is not None:
+                execution["seed"] = seed_value
+            policy_value = self.query_one("#adv-parse", Input).value.strip().lower()
+            if policy_value in {"continue", "halt"}:
+                execution["parse_failure_policy"] = policy_value
 
             convergence["delta_js_threshold"] = _float_or_default(self.query_one("#adv-delta", Input).value, 0.02)
             convergence["epsilon_new_threshold"] = _float_or_default(
                 self.query_one("#adv-epsilon-new", Input).value, 0.01
             )
-            convergence["epsilon_ci_half_width"] = _float_or_default(
-                self.query_one("#adv-epsilon-ci", Input).value, 0.05
-            )
+            epsilon_raw = self.query_one("#adv-epsilon-ci", Input).value.strip()
+            if epsilon_raw:
+                try:
+                    epsilon_ci = float(epsilon_raw)
+                except ValueError:
+                    epsilon_ci = 0.05
+                convergence["epsilon_ci_half_width"] = epsilon_ci if epsilon_ci > 0 else None
             convergence["min_trials"] = _int_or_default(self.query_one("#adv-min", Input).value, 64)
             convergence["patience_batches"] = _int_or_default(self.query_one("#adv-patience", Input).value, 2)
 
@@ -417,7 +486,7 @@ class ReviewScreen(BaseScreen):
             self.write_config = Checkbox("Write arbiter.config.json", value=True, id="review-write")
             yield self.write_config
             self.summarize = Checkbox(
-                "Generate cluster summaries (remote only)",
+                "Generate cluster summaries after run (remote only)",
                 value=False,
                 id="review-summarize",
             )
@@ -459,25 +528,31 @@ class ReviewScreen(BaseScreen):
 
 class ExecutionScreen(BaseScreen):
     def compose(self) -> ComposeResult:
-        surface = Container(id="execution-surface", classes="surface")
-        surface.border_title = "Execution"
-        with surface:
+        execution_surface = Container(id="execution-surface", classes="surface")
+        execution_surface.border_title = "Execution"
+        with execution_surface:
             self.header = Static("", id="execution-header")
             yield self.header
             self.progress = ProgressBar(total=1, id="execution-progress")
             yield self.progress
             self.workers = Static("", id="execution-workers")
             yield self.workers
+        yield execution_surface
+
+        checkpoint_surface = Container(id="checkpoint-surface", classes="surface")
+        checkpoint_surface.border_title = "BATCH CHECKPOINT"
+        with checkpoint_surface:
             self.checkpoint = Static("", id="execution-checkpoint")
             yield self.checkpoint
+        yield checkpoint_surface
         yield _footer_hint()
 
     def on_mount(self) -> None:
         self.event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.worker_state: dict[int, dict[str, Any]] = {}
         self.latest_checkpoint: dict[str, str] | None = None
-        self.checkpoint.update(_checkpoint_text(None))
-        self.set_interval(0.1, self._drain_events)
+        self.checkpoint.update(_checkpoint_text(None, None))
+        self.set_interval(0.2, self._drain_events)
         asyncio.create_task(self._start_execution())
 
     async def _start_execution(self) -> None:
@@ -495,6 +570,7 @@ class ExecutionScreen(BaseScreen):
             return
         self.app.run_setup = setup
         self.base_header = _execution_header(setup)
+        self.convergence = setup.resolved_config.semantic.execution.convergence
         self.header.update(self.base_header)
         on_event = lambda event: self.event_queue.put_nowait(event)
         result = await execute_trials(
@@ -549,8 +625,10 @@ class ExecutionScreen(BaseScreen):
             }
             self._render_workers()
         elif event_type == "batch_checkpoint":
-            self.latest_checkpoint = event.get("row")
-            self.checkpoint.update(_checkpoint_text(self.latest_checkpoint))
+            entry = event.get("entry") or {}
+            stop_reason = event.get("stop_reason")
+            self.latest_checkpoint = entry
+            self.checkpoint.update(_checkpoint_text(entry, getattr(self, "convergence", None), stop_reason))
             entry = event.get("entry") or {}
             clusters = len(entry.get("counts_by_cluster_id") or {})
             top_p = entry.get("top_p")
@@ -561,7 +639,7 @@ class ExecutionScreen(BaseScreen):
                 self.header.update(self.base_header + "\n" + summary)
 
     def _render_workers(self) -> None:
-        lines = ["WID  STATUS   DONE  MODEL                  ATOM         PERSONA"]
+        lines = ["WID  STATUS    DONE  MODEL                     ATOM         PERSONA     "]
         for worker_id in sorted(self.worker_state.keys()):
             data = self.worker_state[worker_id]
             line = _format_worker_line(worker_id, data)
@@ -596,10 +674,10 @@ class ReceiptScreen(BaseScreen):
 
 
 def _status_line(state) -> str:  # type: ignore[no-untyped-def]
-    mode = state.selected_mode.upper()
-    openrouter = "CONNECTED" if state.api_key_present else "MISSING KEY"
-    config = "FOUND" if state.config_path.exists() else "NOT FOUND"
-    return f"Status  MODE {mode}   OPENROUTER {openrouter}   CONFIG {config}"
+    mode = "Remote" if state.selected_mode == "remote" else "Mock"
+    openrouter = "Connected" if state.api_key_present else "Missing Key"
+    config = "Found" if state.config_path.exists() else "Not Found"
+    return f"Status  Mode {mode}   OpenRouter {openrouter}   Config {config}"
 
 
 def _review_summary(input_config: dict[str, Any]) -> str:
@@ -607,16 +685,29 @@ def _review_summary(input_config: dict[str, Any]) -> str:
     q = input_config.get("q", {})
     models = ", ".join(item.get("slug") for item in q.get("models", {}).get("items", []))
     personas = ", ".join(item.get("id") for item in q.get("personas", {}).get("items", []))
+    decode = q.get("decode", {})
+    temp = decode.get("temperature", {})
+    temp_desc = "n/a"
+    if isinstance(temp, dict):
+        if temp.get("type") == "fixed":
+            temp_desc = f"fixed {temp.get('value', 0.7)}"
+        elif temp.get("type") == "range":
+            temp_desc = f"range {temp.get('min', 0.2)}–{temp.get('max', 1.0)}"
     execution = input_config.get("execution", {})
     convergence = input_config.get("convergence", {})
     clustering = input_config.get("clustering", {})
     summarizer = input_config.get("summarizer", {})
+    protocol = input_config.get("protocol", {})
     lines = [
         f"Question: {(question.get('text') or '').strip()[:80]}",
         f"Models: {models or 'none'}",
         f"Personas: {personas or 'none'}",
+        f"Temperature: {temp_desc}",
+        f"Protocol: {protocol.get('type', 'independent')}",
         f"K_max: {execution.get('k_max', 1000)}",
         f"Workers / batch: {execution.get('workers', 8)} / {execution.get('batch_size', execution.get('workers', 8))}",
+        f"Seed: {execution.get('seed', 'auto')}",
+        f"Parse failure policy: {execution.get('parse_failure_policy', 'continue')}",
         f"delta_js: {convergence.get('delta_js_threshold', 0.02)}",
         f"epsilon_new: {convergence.get('epsilon_new_threshold', 0.01)}",
         f"epsilon_ci: {convergence.get('epsilon_ci_half_width', 0.05)}",
@@ -633,6 +724,18 @@ def _execution_header(setup) -> str:  # type: ignore[no-untyped-def]
     models = ", ".join(semantic.models) if semantic.models else "n/a"
     personas = ", ".join(semantic.personas.persona_ids) if semantic.personas.persona_ids else "none"
     mode_label = "remote (OpenRouter)" if semantic.llm.mode == "openrouter" else "mock (no network calls)"
+    temp_policy = semantic.temperature_policy
+    temp_desc = "fixed"
+    if temp_policy.kind == "fixed":
+        value = temp_policy.temperatures[0] if temp_policy.temperatures else 0.7
+        temp_desc = f"fixed {value}"
+    elif temp_policy.kind == "range":
+        temp_min = temp_policy.temperatures[0] if temp_policy.temperatures else 0.2
+        temp_max = temp_policy.temperatures[1] if len(temp_policy.temperatures) > 1 else temp_min
+        temp_desc = f"range {temp_min}–{temp_max}"
+    convergence = semantic.execution.convergence
+    epsilon_ci = convergence.epsilon_ci_half_width
+    epsilon_ci_display = "off" if epsilon_ci is None else epsilon_ci
     lines = [
         f"Run ID: {setup.run_id}",
         f"Started: {setup.started_at.isoformat()}",
@@ -640,39 +743,82 @@ def _execution_header(setup) -> str:  # type: ignore[no-untyped-def]
         f"Mode: {mode_label}",
         f"Models: {models}",
         f"Personas: {personas}",
+        f"Temperature: {temp_desc}",
+        f"Protocol: {semantic.protocol.type}",
         f"Embedding model: {semantic.clustering.embedding_model}",
         f"Cluster tau: {semantic.clustering.tau}",
         f"K_max: {semantic.trial_budget.k_max}",
         f"Workers / batch: {semantic.execution.worker_count} / {semantic.execution.batch_size}",
+        f"Convergence: JS<{convergence.delta_js_threshold} · New<{convergence.epsilon_new_threshold} · CI {epsilon_ci_display}",
+        f"Seed: {semantic.execution.seed}",
+        f"Parse failure policy: {semantic.execution.parse_failure_policy}",
     ]
     return "\n".join(lines)
 
 
-def _checkpoint_text(row: dict[str, str] | None) -> str:
-    if not row:
-        return "Batch  Trials  Clusters  JS     New    CI HW  Stop"
-    return " ".join([str(row.get(key, "")) for key in ["Batch", "Trials", "Clusters", "JS", "New", "CI HW", "Stop"]])
+def _checkpoint_text(
+    entry: dict[str, Any] | None,
+    convergence: Any | None,
+    stop_reason: str | None = None,
+) -> str:
+    header = "Batch  Trials  Clusters  JS (Δ)        New (Δ)       CI HW (Δ)    Stop"
+    if not entry:
+        return header
+    batch = entry.get("batch_index", "—")
+    trials = entry.get("trials_completed_total", "—")
+    clusters = len(entry.get("counts_by_cluster_id") or {})
+    js = entry.get("js_divergence")
+    js_thresh = getattr(convergence, "delta_js_threshold", None)
+    new_rate = entry.get("new_cluster_rate")
+    new_thresh = getattr(convergence, "epsilon_new_threshold", None)
+    ci_hw = entry.get("top_ci_half_width")
+    ci_thresh = getattr(convergence, "epsilon_ci_half_width", None)
+    js_text = _format_threshold(js, js_thresh)
+    new_text = _format_threshold(new_rate, new_thresh)
+    ci_text = _format_threshold(ci_hw, ci_thresh, allow_disabled=True)
+    stop_text = "yes" if stop_reason else "no"
+    return f"{batch:<5}  {trials:<6}  {clusters:<8}  {js_text:<12}  {new_text:<12}  {ci_text:<12}  {stop_text}"
 
 
 def _format_worker_line(worker_id: int, data: dict[str, Any]) -> str:
     wid = f"W{worker_id + 1:02d}"
-    status = str(data.get("status", "IDLE")).ljust(7)
-    done = str(data.get("done", 0)).rjust(4)
-    model = str(data.get("model", "—"))[:22].ljust(22)
+    status = str(data.get("status", "IDLE")).ljust(8)
+    done = str(data.get("done", 0)).rjust(5)
+    model = str(data.get("model", "—"))[:24].ljust(24)
     atom = str(data.get("atom", "—"))[:12].ljust(12)
-    persona = str(data.get("persona", "none"))[:10].ljust(10)
+    persona = str(data.get("persona", "none"))[:12].ljust(12)
     return f"{wid}  {status}  {done}  {model}  {atom}  {persona}"
 
 
 def _receipt_text(result, top_clusters, checkpoints, run_dir: Path) -> str:  # type: ignore[no-untyped-def]
     aggregates = _load_json(run_dir / "aggregates.json")
+    resolved = _load_json(run_dir / "config.resolved.json")
+    convergence = (((resolved.get("semantic") or {}).get("execution") or {}).get("convergence") or {})
+    execution = ((resolved.get("semantic") or {}).get("execution") or {})
     cluster_count = aggregates.get("discovered_cluster_count")
     entropy = aggregates.get("entropy")
     eff_num = aggregates.get("effective_num_clusters")
+    patience = convergence.get("patience_batches")
+    seed = execution.get("seed")
+    parse_policy = execution.get("parse_failure_policy")
+    stop_reason = result.stop_reason
+    stop_explainer = stop_reason
+    if stop_reason == "converged":
+        stop_explainer = f"Converged after {patience} stable batches" if patience else "Converged"
+    elif stop_reason == "max_trials_reached":
+        stop_explainer = "Reached trial cap"
+    elif stop_reason == "parse_failure":
+        stop_explainer = "Stopped after parse failures (policy=halt)"
+    elif stop_reason == "llm_error":
+        stop_explainer = "Stopped after LLM error"
+    elif stop_reason == "embedding_error":
+        stop_explainer = "Stopped after embedding error"
     lines = [
-        f"Stop reason: {result.stop_reason}",
+        f"Stop reason: {stop_reason}",
+        f"Why stopped: {stop_explainer}",
         f"Trials executed: {result.stop_at_trials}",
         f"Valid trials: {result.valid_trials}",
+        f"Parse failures: {result.parse_error_count}",
         f"Batches: {result.batches_completed}",
     ]
     if cluster_count is not None:
@@ -689,7 +835,13 @@ def _receipt_text(result, top_clusters, checkpoints, run_dir: Path) -> str:  # t
         lines.append("Last checkpoints:")
         for row in checkpoints:
             lines.append("  ".join(row.values()))
-    lines.append(f"Artifacts: {run_dir}")
+    lines.append("Next steps:")
+    if seed is not None:
+        lines.append(f"- Rerun with seed: {seed}")
+    if parse_policy:
+        lines.append(f"- Parse failure policy: {parse_policy}")
+    lines.append(f"- Artifacts: {run_dir}")
+    lines.append("- Validate config: arbiter config validate --path arbiter.config.json")
     return "\n".join(lines)
 
 
@@ -712,6 +864,27 @@ def _float_or_default(value: str, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _optional_int(value: str) -> int | None:
+    if value is None:
+        return None
+    trimmed = str(value).strip()
+    if not trimmed:
+        return None
+    try:
+        return int(trimmed)
+    except ValueError:
+        return None
+
+
+def _format_threshold(value: float | None, threshold: float | None, *, allow_disabled: bool = False) -> str:
+    if threshold is None:
+        return "off" if allow_disabled else "n/a"
+    if value is None:
+        return "n/a"
+    op = "<" if value <= threshold else ">"
+    return f"{value:.3f}{op}{threshold:.3f}"
 
 
 def _catalog_options(items) -> list[SelectOption]:  # type: ignore[no-untyped-def]
