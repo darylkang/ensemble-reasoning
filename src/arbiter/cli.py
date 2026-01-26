@@ -23,7 +23,10 @@ app.add_typer(config_app, name="config")
 
 
 @config_app.command("validate")
-def config_validate(path: str = typer.Option("arbiter.config.json", "--path", "-p")) -> None:
+def config_validate(
+    path: str = typer.Option("arbiter.config.json", "--path", "-p"),
+    strict: bool = typer.Option(False, "--strict", help="Treat warnings as errors."),
+) -> None:
     """Validate a canonical config file without executing a run."""
     config_path = Path(path)
     default_model = os.getenv("ARBITER_DEFAULT_MODEL", "openai/gpt-5")
@@ -44,6 +47,8 @@ def config_validate(path: str = typer.Option("arbiter.config.json", "--path", "-
         print("VALID (with warnings)")
         for issue in warnings:
             print(f"- {issue}")
+        if strict:
+            raise typer.Exit(code=1)
     else:
         print("VALID")
 

@@ -120,6 +120,14 @@ def validate_config(
         _require_positive_int(execution.get("workers"), "execution.workers", errors)
         _require_positive_int(execution.get("batch_size"), "execution.batch_size", errors)
         _require_non_negative_int(execution.get("retries"), "execution.retries", errors)
+        seed = execution.get("seed")
+        if seed is not None:
+            _require_non_negative_int(seed, "execution.seed", errors)
+        policy = execution.get("parse_failure_policy", "continue")
+        if policy not in {"continue", "halt"}:
+            errors.append(
+                ValidationIssue("execution.parse_failure_policy", "Must be 'continue' or 'halt'.")
+            )
 
     convergence = data.get("convergence")
     if not isinstance(convergence, dict):

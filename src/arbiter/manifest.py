@@ -35,6 +35,7 @@ class Manifest:
     llm_call_count: int
     embedding_call_count: int
     summarizer_call_count: int
+    execution_seed: int
 
     def to_dict(self) -> dict:
         return {
@@ -57,6 +58,7 @@ class Manifest:
             "llm_call_count": self.llm_call_count,
             "embedding_call_count": self.embedding_call_count,
             "summarizer_call_count": self.summarizer_call_count,
+            "execution_seed": self.execution_seed,
         }
 
 

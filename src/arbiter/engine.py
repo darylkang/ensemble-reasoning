@@ -32,6 +32,7 @@ class WorkItem:
     atom: QAtom
     temperature: float
     temperature_policy: dict[str, Any]
+    request_seed: int
     messages: list[dict[str, Any]]
 
 
@@ -42,6 +43,7 @@ class PendingRetry:
     atom: QAtom
     temperature: float
     temperature_policy: dict[str, Any]
+    request_seed: int
     messages: list[dict[str, Any]]
 
 
@@ -124,7 +126,7 @@ async def execute_trials(
         if on_event is not None:
             on_event(event)
 
-    rng_seed = random.randrange(2**32)
+    rng_seed = int(execution.seed)
     rng = random.Random(rng_seed)
 
     counts_by_cluster: dict[str, int] = {}
@@ -132,6 +134,7 @@ async def execute_trials(
     valid_trials = 0
     parse_valid_count = 0
     parse_error_count = 0
+    parse_failure_trial_ids: list[str] = []
     llm_error_count = 0
     embedding_error_count = 0
     embedding_call_count = 0
@@ -245,6 +248,7 @@ async def execute_trials(
                                 atom=retry.atom,
                                 temperature=retry.temperature,
                                 temperature_policy=retry.temperature_policy,
+                                request_seed=retry.request_seed,
                                 messages=retry.messages,
                             )
                         )
@@ -253,6 +257,7 @@ async def execute_trials(
                     atom = _sample_atom(rng, semantic.q_distribution.atoms)
                     temperature = _sample_temperature(rng, semantic.temperature_policy, atom.temperature)
                     messages = build_messages(question_text, atom.persona_id)
+                    request_seed = (rng_seed + trial_counter) % (2**32)
                     batch_items.append(
                         WorkItem(
                             trial_id=f"trial_{trial_counter:06d}",
@@ -261,6 +266,7 @@ async def execute_trials(
                             atom=atom,
                             temperature=temperature,
                             temperature_policy=temperature_policy_payload,
+                            request_seed=request_seed,
                             messages=messages,
                         )
                     )
@@ -273,6 +279,9 @@ async def execute_trials(
                 for _ in range(len(batch_items)):
                     outcome = await results.get()
                     batch_results.append(outcome)
+
+                batch_results_sorted = sorted(batch_results, key=lambda item: item.trial_record["trial_id"])
+                for outcome in batch_results_sorted:
                     total_trials += 1
                     llm_call_count += 1
                     append_jsonl(trials_path, outcome.trial_record)
@@ -282,15 +291,19 @@ async def execute_trials(
                         valid_batch.append(outcome)
                     else:
                         parse_error_count += 1
+                        parse_failure_trial_ids.append(outcome.trial_record["trial_id"])
                         append_jsonl(parsed_path, outcome.parsed_record)
 
                         if outcome.error:
                             llm_error_count += 1
                             stop_reason = "llm_error"
                             stop_error = outcome.error
+                        elif execution.parse_failure_policy == "halt":
+                            stop_reason = "parse_failure"
                         elif outcome.retry_messages and outcome.retries_used < max_retries:
                             if total_trials < call_cap:
                                 trial_counter += 1
+                                request_seed = (rng_seed + trial_counter) % (2**32)
                                 pending_retries.append(
                                     PendingRetry(
                                         trial_id=f"trial_{trial_counter:06d}",
@@ -298,13 +311,12 @@ async def execute_trials(
                                         atom=outcome.atom,
                                         temperature=outcome.trial_record.get("temperature", outcome.atom.temperature),
                                         temperature_policy=outcome.trial_record.get("temperature_policy", temperature_policy_payload),
+                                        request_seed=request_seed,
                                         messages=outcome.retry_messages,
                                     )
                                 )
                             else:
                                 stop_reason = "budget_exhausted"
-                        else:
-                            stop_reason = "parse_failure"
 
                     _emit(
                         {
@@ -383,6 +395,30 @@ async def execute_trials(
                     js_divergence=js_divergence,
                     new_cluster_rate=new_cluster_rate,
                 )
+                converged_candidate = _converged_candidate(
+                    entry=entry,
+                    min_trials=convergence.min_trials,
+                    delta_js_threshold=convergence.delta_js_threshold,
+                    epsilon_new_threshold=convergence.epsilon_new_threshold,
+                    epsilon_ci_half_width=convergence.epsilon_ci_half_width,
+                )
+
+                if stop_reason is None:
+                    if converged_candidate:
+                        consecutive_converged += 1
+                    else:
+                        consecutive_converged = 0
+
+                    if (
+                        valid_trials >= convergence.min_trials
+                        and converged_candidate
+                        and consecutive_converged >= convergence.patience_batches
+                        and not pending_retries
+                    ):
+                        stop_reason = "converged"
+                    elif total_trials >= call_cap:
+                        stop_reason = "max_trials_reached"
+
                 convergence_trace.append(entry)
                 checkpoint_row = _checkpoint_row(entry, stop_reason)
                 _emit(
@@ -396,32 +432,6 @@ async def execute_trials(
                 )
 
                 if stop_reason is not None:
-                    break
-
-                converged_candidate = _converged_candidate(
-                    entry=entry,
-                    min_trials=convergence.min_trials,
-                    delta_js_threshold=convergence.delta_js_threshold,
-                    epsilon_new_threshold=convergence.epsilon_new_threshold,
-                    epsilon_ci_half_width=convergence.epsilon_ci_half_width,
-                )
-
-                if converged_candidate:
-                    consecutive_converged += 1
-                else:
-                    consecutive_converged = 0
-
-                if (
-                    valid_trials >= convergence.min_trials
-                    and converged_candidate
-                    and consecutive_converged >= convergence.patience_batches
-                    and not pending_retries
-                ):
-                    stop_reason = "converged"
-                    break
-
-                if total_trials >= call_cap:
-                    stop_reason = "max_trials_reached"
                     break
 
                 prev_distribution = distribution
@@ -500,10 +510,13 @@ async def execute_trials(
         "valid_trials_total": valid_trials,
         "parse_valid_total": parse_valid_count,
         "parse_error_count": parse_error_count,
+        "parse_failure_trial_ids": parse_failure_trial_ids,
         "llm_error_count": llm_error_count,
         "embedding_error_count": embedding_error_count,
         "embedding_call_count": embedding_call_count,
         "summarizer_call_count": summarizer_call_count,
+        "execution_seed": rng_seed,
+        "parse_failure_policy": execution.parse_failure_policy,
         "sampling_seed": rng_seed,
         "converged": stop_reason == "converged",
         "batches_completed": batches_completed,
@@ -567,7 +580,7 @@ async def _execute_one_trial(
         temperature=item.temperature,
         top_p=request_defaults.top_p,
         max_tokens=request_defaults.max_tokens,
-        seed=request_defaults.seed,
+        seed=request_defaults.seed if request_defaults.seed is not None else item.request_seed,
         stop=request_defaults.stop,
         response_format=request_defaults.response_format,
         tools=request_defaults.tools,

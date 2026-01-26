@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 import uuid
+import random
 
 from arbiter.config import (
     BudgetGuardrail,
@@ -96,7 +97,7 @@ def prepare_run(
     run_dir = create_run_dir(Path(output_base_dir_str), timestamp, run_slug)
 
     resolved_config = ResolvedConfig.build_from_wizard_inputs(
-        schema_version="0.8",
+        schema_version="0.9",
         run_name=run_name or "auto",
         run_slug=run_slug,
         run_id=run_id,
@@ -126,6 +127,9 @@ def prepare_run(
     input_config["llm"]["mode"] = llm_mode_label
     input_config["llm"].setdefault("model", llm_config.model)
     input_config.setdefault("question", {})["id"] = question_record["question_id"]
+    input_config.setdefault("execution", {})
+    input_config["execution"].setdefault("seed", execution_config.seed)
+    input_config["execution"].setdefault("parse_failure_policy", execution_config.parse_failure_policy)
 
     write_json(run_dir / "config.input.json", input_config)
     write_json(run_dir / "config.resolved.json", resolved)
@@ -172,6 +176,7 @@ def write_manifest(*, setup: RunSetup, ended_at: datetime, execution_result: Any
         llm_call_count=llm_call_count,
         embedding_call_count=embedding_call_count,
         summarizer_call_count=summarizer_call_count,
+        execution_seed=semantic.execution.seed,
     )
     write_json(setup.run_dir / "manifest.json", manifest.to_dict())
 
@@ -314,6 +319,14 @@ def _build_execution_config(input_config: dict[str, object]) -> ExecutionConfig:
     worker_count = int(execution.get("workers", 8))
     batch_size = int(execution.get("batch_size", worker_count))
     max_retries = int(execution.get("retries", 2))
+    seed_value = execution.get("seed")
+    if seed_value is None:
+        seed = random.SystemRandom().randrange(2**32)
+    else:
+        seed = int(seed_value)
+    parse_failure_policy = str(execution.get("parse_failure_policy", "continue")).lower()
+    if parse_failure_policy not in {"continue", "halt"}:
+        parse_failure_policy = "continue"
 
     epsilon_ci = convergence.get("epsilon_ci_half_width", 0.05)
     if epsilon_ci is not None:
@@ -332,6 +345,8 @@ def _build_execution_config(input_config: dict[str, object]) -> ExecutionConfig:
         worker_count=max(1, worker_count),
         batch_size=max(1, batch_size),
         max_retries=max(0, max_retries),
+        seed=seed,
+        parse_failure_policy=parse_failure_policy,
         convergence=convergence_config,
     )
 

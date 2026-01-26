@@ -145,6 +145,8 @@ class ExecutionConfig:
     worker_count: int
     batch_size: int
     max_retries: int
+    seed: int
+    parse_failure_policy: str
     convergence: ConvergenceConfig
 
     def to_dict(self) -> dict:
@@ -152,6 +154,8 @@ class ExecutionConfig:
             "worker_count": self.worker_count,
             "batch_size": self.batch_size,
             "max_retries": self.max_retries,
+            "seed": self.seed,
+            "parse_failure_policy": self.parse_failure_policy,
             "convergence": self.convergence.to_dict(),
         }
 
@@ -336,7 +340,7 @@ class PersonaLoadResult:
     error: str | None
 
 
-CANONICAL_SCHEMA_VERSION = "1.1"
+CANONICAL_SCHEMA_VERSION = "1.2"
 SUMMARIZER_PROMPT_VERSION = "v1"
 
 
@@ -383,6 +387,8 @@ def default_canonical_config(
             "workers": 8,
             "batch_size": 8,
             "retries": 2,
+            "seed": None,
+            "parse_failure_policy": "continue",
         },
         "convergence": {
             "delta_js_threshold": 0.02,
@@ -453,6 +459,10 @@ def normalize_canonical_config(
     merged.setdefault("clustering", base["clustering"])
     merged.setdefault("summarizer", base["summarizer"])
     merged.setdefault("llm", base["llm"])
+
+    execution = merged.setdefault("execution", base["execution"])
+    execution.setdefault("seed", None)
+    execution.setdefault("parse_failure_policy", "continue")
 
     merged["q"]["models"]["items"] = _normalize_weighted_items(models["items"], key="slug")
     merged["q"]["personas"]["items"] = _normalize_weighted_items(personas["items"], key="id")

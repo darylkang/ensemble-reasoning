@@ -80,6 +80,13 @@ class OnlineLeaderClustering:
         outcome: str,
         rationale: str | None,
     ) -> None:
+        """Incrementally update centroid with the new embedding.
+
+        Uses a running mean followed by renormalization. This is an
+        approximation to maintaining a mean of unit vectors and is
+        acceptable for online convergence checks where determinism and
+        monotonic updates are more important than exact batch re-fit.
+        """
         cluster.count += 1
         updated = [
             (cluster.centroid[i] * (cluster.count - 1) + embedding[i]) / cluster.count

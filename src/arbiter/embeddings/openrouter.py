@@ -42,20 +42,23 @@ class OpenRouterEmbeddingsClient:
             raise RuntimeError(f"OpenRouter embeddings error {response.status_code}: {response.text}")
         payload = response.json()
         data = payload.get("data", [])
-        results: list[EmbeddingResult] = []
-        for index, item in enumerate(data):
+        results: list[EmbeddingResult | None] = [None] * len(texts)
+        for fallback_index, item in enumerate(data):
+            index = item.get("index")
+            if index is None:
+                index = fallback_index
             raw_embedding = item.get("embedding")
             embedding = _decode_embedding(raw_embedding)
-            results.append(
-                EmbeddingResult(
-                    text=texts[index],
-                    embedding=embedding,
-                    model=payload.get("model", self._model),
-                    dims=len(embedding),
-                    raw={"latency_ms": latency_ms, "usage": payload.get("usage"), "raw": item},
-                )
+            results[index] = EmbeddingResult(
+                text=texts[index],
+                embedding=embedding,
+                model=payload.get("model", self._model),
+                dims=len(embedding),
+                raw={"latency_ms": latency_ms, "usage": payload.get("usage"), "raw": item},
             )
-        return results
+        if any(result is None for result in results):
+            raise RuntimeError("OpenRouter embeddings response missing entries.")
+        return [result for result in results if result is not None]
 
     async def aclose(self) -> None:
         await self._client.aclose()
