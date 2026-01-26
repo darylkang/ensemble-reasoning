@@ -56,7 +56,7 @@ python -m pip install "git+https://github.com/darylkang/ensemble-reasoning.git@m
 5) If Customize: decode params, persona mix, model mix, protocol, advanced settings
 6) Review -> Execute -> Receipt
 
-Runs write a folder under `./runs` following the artifact contract in `docs/spec.md`, including `manifest.json`, `config.input.json`, `config.resolved.json`, `question.json`, `trials.jsonl`, `parsed.jsonl`, `embeddings.jsonl`, `clusters_online.json`, `clusters_offline.json`, `cluster_summaries.json`, `aggregates.json`, and `metrics.json`.
+Runs write a folder under `./runs` following the artifact contract in `docs/spec.md`, including `manifest.json`, `config.input.json`, `config.resolved.json`, `question.json`, `trials.jsonl`, `parsed.jsonl`, `embeddings.*`, `clusters_online.json`, `clusters_offline.json`, `cluster_summaries.json`, `aggregates.json`, and `metrics.json`.
 
 ```bash
 arbiter --help

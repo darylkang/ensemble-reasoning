@@ -37,8 +37,11 @@ The output object is embedded and clustered to define emergent modes; no predefi
 
 ## Parsing and Retries
 - Responses are parsed as JSON and validated for required keys.
-- On parse/validation failure, Arbiter may retry up to `execution.max_retries` by appending a corrective user message.
-- If retries are exhausted, the run stops with a clear `stop_reason` and writes partial artifacts; invalid outputs do not contribute to embeddings or clustering.
+- On parse/validation failure, Arbiter may retry up to `execution.max_retries` (resolved from canonical `execution.retries`) by appending a corrective user message.
+- After retries are exhausted, `execution.parse_failure_policy` determines behavior:
+  - `continue` (default): mark `parse_valid=false`, record the error, and continue.
+  - `halt`: stop the run with `stop_reason="parse_failure"` and write partial artifacts.
+  Invalid outputs do not contribute to embeddings or clustering.
 
 ## Operational Distribution
 Mode distributions are defined with respect to an explicit configuration distribution `Q(c)`. `Q(c)` must be resolved and serialized in run artifacts so that `P_Q(y|x)` is well-defined and auditable.
@@ -47,11 +50,11 @@ Mode distributions are defined with respect to an explicit configuration distrib
 Arbiter accepts a canonical, human-editable configuration file (`arbiter.config.json`) that mirrors the wizard steps. The canonical config is factorized and normalized before being resolved into explicit `Q(c)` atoms.
 
 Top-level structure:
-- `schema_version`: canonical config schema version (current: `1.1`).
+- `schema_version`: canonical config schema version (current: `1.2`).
 - `question`: `{id?, text, metadata}` (question text can be filled by the wizard if missing).
 - `q`: factorized `Q(c)` definition with weighted `models`, `personas`, and `decode` temperature policy.
 - `protocol`: `{type}` (independent for now).
-- `execution`: `{k_max, workers, batch_size, retries}`.
+- `execution`: `{k_max, workers, batch_size, retries, seed, parse_failure_policy}`.
 - `convergence`: `{delta_js_threshold, epsilon_new_threshold, epsilon_ci_half_width, min_trials, patience_batches}`.
 - `clustering`: `{method, tau, embed_text, embedding_model}`.
 - `summarizer`: `{enabled, model, prompt_version}`.
@@ -61,14 +64,14 @@ Each run writes a `config.input.json` copy of the canonical config used to drive
 
 ## Resolved Config Structure
 - `config.resolved.json` must separate `run` metadata from `semantic` configuration.
-- `schema_version` identifies the resolved config schema; breaking changes bump this value (current: `0.8`).
+- `schema_version` identifies the resolved config schema; breaking changes bump this value (current: `0.9`).
 - `semantic` includes the heterogeneity rung, `protocol`, `clustering`, `summarizer`, decoding settings, persona policy, `trial_budget` with `k_max`, call guardrails, `execution` controls, and the explicit `Q(c)` atoms/weights.
-- `execution` includes `worker_count`, `batch_size`, `max_retries`, and `convergence` thresholds (`delta_js_threshold`, `epsilon_new_threshold`, `epsilon_ci_half_width`, `min_trials`, `patience_batches`).
+- `execution` includes `worker_count`, `batch_size`, `max_retries`, `seed`, `parse_failure_policy`, and `convergence` thresholds (`delta_js_threshold`, `epsilon_new_threshold`, `epsilon_ci_half_width`, `min_trials`, `patience_batches`).
+- If `execution.seed` is omitted in the canonical config, a seed is generated and persisted in run artifacts.
 - `run` includes run identifiers and output paths; timestamps may be included for provenance.
 
 ## LLM Configuration
-- `semantic.llm.client` is fixed to `openrouter` to reflect the sole network provider.
-- `semantic.llm.mode` records `openrouter` or `mock` to reflect whether remote calls are enabled.
+- OpenRouter is the sole network provider; `semantic.llm.mode` records `openrouter` or `mock`.
 - `semantic.llm.model` is the OpenRouter model slug used for requests.
 - `semantic.llm.request_defaults` stores OpenAI-compatible parameters (temperature, top_p, max_tokens, seed, stop, response_format, tools, tool_choice, parallel_tool_calls).
 - `semantic.llm.routing_defaults` stores OpenRouter routing defaults, with `allow_fallbacks` set to `false` in measurement mode.
@@ -116,6 +119,7 @@ The primary budget axis is the number of model calls. Token totals, cost estimat
 - Sampling is batched, with convergence checks at batch boundaries.
 - Convergence is defined on cluster distributions derived from online clustering.
 - Online clustering must maintain stable cluster identifiers; offline clustering results must be reported separately.
+- Cluster assignment order at batch boundaries must be deterministic (e.g., sorted by scheduled `trial_id`) to preserve stable IDs.
 - Convergence indicates estimate stability, not correctness.
 - Per-batch convergence metrics must be recorded in `metrics.json` under a `convergence_trace` array.
 - Runs must record `stop_reason` and `stop_at_trials` when execution halts.
@@ -129,6 +133,7 @@ Default convergence criteria include:
 - Each run must serialize resolved configuration and capture environment and git metadata.
 - The manifest must include a `semantic_config_hash`, computed by hashing the resolved config with run-specific fields removed (e.g., run_id, timestamps, output_dir). This is distinct from the raw config hash.
 - Embedding and summarizer instruments must be recorded (model slugs, prompt version/hash, normalization).
+- The manifest and `metrics.json` must record the effective execution seed.
 
 ## CLI UX Target
 The interactive TUI is a decision tree:
@@ -148,12 +153,12 @@ Each run writes a self-contained directory containing:
 - `question.json` (the primary question record)
 - `trials.jsonl` (one row per trial; includes atom/model/temperature/persona, effective request body, routing, overrides, timestamps, usage, and raw response)
 - `parsed.jsonl` (parsed output object `o`, parse validity, retries used, optional parse error, `cluster_id`, `embedded_text`)
-- `embeddings.jsonl` (embedding vectors encoded as base64 float32 with model metadata)
+- `embeddings.*` (embedding vectors encoded with model metadata; format is intentionally flexible, current default is JSONL with base64 float32)
 - `clusters_online.json` (online clustering assignments, centroids encoded as base64 float32, exemplars, and clustering parameters)
 - `clusters_offline.json` (offline clustering output or `not_run` scaffold)
 - `cluster_summaries.json` (summarizer output or `not_run` scaffold)
 - `aggregates.json` (per-question cluster distributions, counts, uncertainty summaries, top-cluster CI, parse error rate, effective cluster count)
-- `metrics.json` (run-level summaries; includes `convergence_trace`, `stop_reason`, `stop_at_trials`, and sampling seed)
+- `metrics.json` (run-level summaries; includes `convergence_trace`, `stop_reason`, `stop_at_trials`, execution seed, and parse-failure counts)
 - `logs/` (optional)
 
 ## Confidence Intervals (Current Default)
