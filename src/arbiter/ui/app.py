@@ -12,7 +12,7 @@ from textual.app import App
 
 from arbiter.config import default_canonical_config, normalize_canonical_config
 from arbiter.env import load_dotenv
-from arbiter.runflow import RunSetup, prepare_run, write_manifest, collect_last_checkpoints, collect_top_modes
+from arbiter.runflow import RunSetup, prepare_run, write_manifest, collect_last_checkpoints, collect_top_clusters
 from arbiter.engine import execute_trials
 from arbiter.ui.screens import (
     AdvancedGateScreen,
@@ -93,13 +93,13 @@ class ArbiterApp(App):
             api_key_present=False,
             selected_mode="mock",
         )
-        await execute_trials(
+        result = await execute_trials(
             run_dir=self.run_setup.run_dir,
             resolved_config=self.run_setup.resolved_config,
             question=self.run_setup.question_record,
             on_event=None,
         )
-        write_manifest(setup=self.run_setup, ended_at=datetime.now(timezone.utc))
+        write_manifest(setup=self.run_setup, ended_at=datetime.now(timezone.utc), execution_result=result)
 
     def show_config(self) -> None:
         self.push_screen(ConfigScreen(self.state))
@@ -135,9 +135,9 @@ class ArbiterApp(App):
         self.push_screen(ExecutionScreen(self.state))
 
     def show_receipt(self, run_dir: Path, execution_result) -> None:
-        top_modes = collect_top_modes(run_dir, top_n=3)
+        top_clusters = collect_top_clusters(run_dir, top_n=3)
         checkpoints = collect_last_checkpoints(run_dir, limit=3)
-        self.push_screen(ReceiptScreen(self.state, execution_result, top_modes, checkpoints, run_dir))
+        self.push_screen(ReceiptScreen(self.state, execution_result, top_clusters, checkpoints, run_dir))
 
 
 def run_app() -> None:

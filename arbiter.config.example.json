@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "question": {
     "id": null,
     "text": "",
@@ -48,9 +48,15 @@
     "patience_batches": 2
   },
   "clustering": {
-    "method": "hash_baseline",
+    "method": "leader",
     "tau": 0.85,
-    "embed_text": "outcome+rationale"
+    "embed_text": "outcome",
+    "embedding_model": "openai/text-embedding-3-large"
+  },
+  "summarizer": {
+    "enabled": false,
+    "model": "openai/gpt-5",
+    "prompt_version": "v1"
   },
   "llm": {
     "mode": "mock",

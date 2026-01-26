@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -12,10 +13,14 @@ import random
 import time
 from pathlib import Path
 from typing import Any, Callable
+from array import array
 
 from arbiter.config import LLMConfig, QAtom, ResolvedConfig
+from arbiter.embeddings import create_embeddings_client
+from arbiter.clustering import OnlineLeaderClustering
 from arbiter.llm.client import build_request_body, create_client
 from arbiter.llm.types import LLMRequest
+from arbiter.summarizer import summarize_clusters
 from arbiter.storage import append_jsonl, write_json
 
 
@@ -45,8 +50,10 @@ class TrialOutcome:
     trial_record: dict[str, Any]
     parsed_record: dict[str, Any]
     parse_valid: bool
-    mode_id: str | None
     embedded_text: str | None
+    outcome_text: str | None
+    rationale: str | None
+    trace_summary: str | None
     retry_messages: list[dict[str, Any]] | None
     retries_used: int
     atom: QAtom
@@ -61,7 +68,7 @@ class ExecutionResult:
     parse_error_count: int
     batches_completed: int
     converged: bool
-    top_mode_id: str | None
+    top_cluster_id: str | None
     top_p: float | None
     top_ci_low: float | None
     top_ci_high: float | None
@@ -69,6 +76,9 @@ class ExecutionResult:
     entropy: float | None
     margin: float | None
     disagreement_rate: float | None
+    llm_call_count: int
+    embedding_call_count: int
+    summarizer_call_count: int
 
 
 async def execute_trials(
@@ -87,8 +97,12 @@ async def execute_trials(
     question_path = run_dir / "question.json"
     trials_path = run_dir / "trials.jsonl"
     parsed_path = run_dir / "parsed.jsonl"
+    embeddings_path = run_dir / "embeddings.jsonl"
     aggregates_path = run_dir / "aggregates.json"
     metrics_path = run_dir / "metrics.json"
+    clusters_online_path = run_dir / "clusters_online.json"
+    clusters_offline_path = run_dir / "clusters_offline.json"
+    cluster_summaries_path = run_dir / "cluster_summaries.json"
 
     write_json(question_path, question)
 
@@ -97,6 +111,8 @@ async def execute_trials(
     trial_budget = semantic.trial_budget
     budget_guardrail = semantic.budget_guardrail
     llm_config = semantic.llm
+    if semantic.clustering.method != "leader":
+        raise ValueError("Unsupported clustering method for execution.")
     call_cap = min(trial_budget.k_max, budget_guardrail.max_calls)
     worker_count = max(1, execution.worker_count)
     batch_size = max(1, execution.batch_size)
@@ -111,12 +127,16 @@ async def execute_trials(
     rng_seed = random.randrange(2**32)
     rng = random.Random(rng_seed)
 
-    counts_by_mode: dict[str, int] = {}
-    seen_modes: set[str] = set()
+    counts_by_cluster: dict[str, int] = {}
     total_trials = 0
     valid_trials = 0
+    parse_valid_count = 0
     parse_error_count = 0
     llm_error_count = 0
+    embedding_error_count = 0
+    embedding_call_count = 0
+    summarizer_call_count = 0
+    llm_call_count = 0
     convergence_trace: list[dict[str, Any]] = []
     stop_reason: str | None = None
     stop_error: str | None = None
@@ -126,6 +146,15 @@ async def execute_trials(
     consecutive_converged = 0
     batches_completed = 0
     prev_distribution: dict[str, float] | None = None
+
+    clusterer = OnlineLeaderClustering(tau=semantic.clustering.tau)
+    embedding_model = semantic.clustering.embedding_model
+    embed_text_policy = semantic.clustering.embed_text
+    embeddings_client = create_embeddings_client(
+        semantic.llm.mode,
+        model=embedding_model,
+        base_url=None,
+    )
 
     worker_counts = [0 for _ in range(worker_count)]
 
@@ -169,6 +198,7 @@ async def execute_trials(
                 run_id=resolved_config.run.run_id,
                 question_id=question_id,
                 question_hash=question_hash,
+                embed_text_policy=embed_text_policy,
                 llm_config=llm_config,
                 client=client,
             )
@@ -179,7 +209,6 @@ async def execute_trials(
                     "worker_id": worker_id,
                     "trial_id": item.trial_id,
                     "parse_valid": outcome.parse_valid,
-                    "mode_id": outcome.mode_id,
                     "error": outcome.error,
                     "completed": worker_counts[worker_id],
                 }
@@ -188,7 +217,8 @@ async def execute_trials(
             queue.task_done()
 
     async def run_loop() -> None:
-        nonlocal total_trials, valid_trials, parse_error_count, llm_error_count
+        nonlocal total_trials, valid_trials, parse_valid_count, parse_error_count, llm_error_count
+        nonlocal embedding_call_count, embedding_error_count, llm_call_count
         nonlocal stop_reason, stop_error, batches_completed, consecutive_converged
         nonlocal trial_counter, prev_distribution
 
@@ -239,18 +269,20 @@ async def execute_trials(
                     await queue.put(item)
 
                 batch_results: list[TrialOutcome] = []
+                valid_batch: list[TrialOutcome] = []
                 for _ in range(len(batch_items)):
                     outcome = await results.get()
                     batch_results.append(outcome)
                     total_trials += 1
+                    llm_call_count += 1
                     append_jsonl(trials_path, outcome.trial_record)
-                    append_jsonl(parsed_path, outcome.parsed_record)
 
-                    if outcome.parse_valid and outcome.mode_id:
-                        valid_trials += 1
-                        counts_by_mode[outcome.mode_id] = counts_by_mode.get(outcome.mode_id, 0) + 1
+                    if outcome.parse_valid and outcome.embedded_text and outcome.outcome_text:
+                        parse_valid_count += 1
+                        valid_batch.append(outcome)
                     else:
                         parse_error_count += 1
+                        append_jsonl(parsed_path, outcome.parsed_record)
 
                         if outcome.error:
                             llm_error_count += 1
@@ -291,27 +323,65 @@ async def execute_trials(
                         "valid_trials": valid_trials,
                     }
                 )
+                new_clusters_in_batch = 0
+                if valid_batch:
+                    valid_batch_sorted = sorted(valid_batch, key=lambda item: item.trial_record["trial_id"])
+                    texts = [item.embedded_text or "" for item in valid_batch_sorted]
+                    try:
+                        embedding_results = await embeddings_client.embed(texts)
+                        embedding_call_count += 1
+                    except Exception as exc:  # noqa: BLE001
+                        embedding_error_count += 1
+                        stop_reason = "embedding_error"
+                        stop_error = str(exc)
+                        embedding_results = []
+                    if stop_reason is None and len(embedding_results) != len(valid_batch_sorted):
+                        stop_reason = "embedding_error"
+                        stop_error = "Embedding result count mismatch."
+                    if stop_reason is None:
+                        for outcome, embedding in zip(valid_batch_sorted, embedding_results):
+                            cluster_id, is_new = clusterer.assign(
+                                embedding.embedding,
+                                trial_id=outcome.trial_record["trial_id"],
+                                outcome=outcome.outcome_text or "",
+                                rationale=outcome.rationale,
+                            )
+                            if is_new:
+                                new_clusters_in_batch += 1
+                            outcome.parsed_record["cluster_id"] = cluster_id
+                            append_jsonl(parsed_path, outcome.parsed_record)
+                            counts_by_cluster[cluster_id] = counts_by_cluster.get(cluster_id, 0) + 1
+                            valid_trials += 1
+                            embedding_record = _embedding_record(
+                                trial_id=outcome.trial_record["trial_id"],
+                                text=outcome.embedded_text or "",
+                                embedding=embedding.embedding,
+                                dims=embedding.dims,
+                                model=embedding.model,
+                                raw=embedding.raw,
+                            )
+                            append_jsonl(embeddings_path, embedding_record)
 
-                new_mode_rate, seen_modes_after = _new_mode_rate(batch_results, seen_modes, len(batch_items))
-                seen_modes.clear()
-                seen_modes.update(seen_modes_after)
+                new_cluster_rate = (
+                    new_clusters_in_batch / len(valid_batch) if valid_batch else 0.0
+                )
 
-                distribution = _distribution(counts_by_mode, valid_trials)
+                distribution = _distribution(counts_by_cluster, valid_trials)
                 js_divergence = _js_divergence(prev_distribution, distribution)
-                top_mode_id = _top_mode_id(counts_by_mode)
-                top_p = distribution.get(top_mode_id) if top_mode_id else None
-                top_ci = _wilson_ci(counts_by_mode.get(top_mode_id, 0), valid_trials) if top_mode_id else None
+                top_cluster_id = _top_cluster_id(counts_by_cluster)
+                top_p = distribution.get(top_cluster_id) if top_cluster_id else None
+                top_ci = _wilson_ci(counts_by_cluster.get(top_cluster_id, 0), valid_trials) if top_cluster_id else None
                 entry = _convergence_entry(
                     batch_index=batch_index,
                     total_trials=total_trials,
                     valid_trials=valid_trials,
-                    counts_by_mode=counts_by_mode,
-                    distribution_by_mode=distribution,
-                    top_mode_id=top_mode_id,
+                    counts_by_cluster=counts_by_cluster,
+                    distribution_by_cluster=distribution,
+                    top_cluster_id=top_cluster_id,
                     top_p=top_p,
                     top_ci=top_ci,
                     js_divergence=js_divergence,
-                    new_mode_rate=new_mode_rate,
+                    new_cluster_rate=new_cluster_rate,
                 )
                 convergence_trace.append(entry)
                 checkpoint_row = _checkpoint_row(entry, stop_reason)
@@ -364,32 +434,59 @@ async def execute_trials(
         await run_loop()
     finally:
         await client.aclose()
+        await embeddings_client.aclose()
 
     if stop_reason is None:
         stop_reason = "max_trials_reached"
 
-    distribution = _distribution(counts_by_mode, valid_trials)
-    top_mode_id = _top_mode_id(counts_by_mode)
-    top_p = distribution.get(top_mode_id) if top_mode_id else None
-    top_ci = _wilson_ci(counts_by_mode.get(top_mode_id, 0), valid_trials) if top_mode_id else None
+    clusters_payload = _clusters_online_payload(
+        clusterer=clusterer,
+        method=semantic.clustering.method,
+        tau=semantic.clustering.tau,
+        embedding_model=embedding_model,
+        embed_text=embed_text_policy,
+    )
+    write_json(clusters_online_path, clusters_payload)
+    write_json(
+        clusters_offline_path,
+        {"status": "not_run", "reason": "not_implemented"},
+    )
+
+    if semantic.summarizer.enabled:
+        summaries_payload, summarizer_call_count = await summarize_clusters(
+            clusters=clusters_payload.get("clusters", []),
+            llm_mode=semantic.llm.mode,
+            model_slug=semantic.summarizer.model,
+            prompt_version=semantic.summarizer.prompt_version,
+        )
+    else:
+        summaries_payload = {"status": "not_run", "reason": "disabled"}
+    write_json(cluster_summaries_path, summaries_payload)
+
+    distribution = _distribution(counts_by_cluster, valid_trials)
+    top_cluster_id = _top_cluster_id(counts_by_cluster)
+    top_p = distribution.get(top_cluster_id) if top_cluster_id else None
+    top_ci = _wilson_ci(counts_by_cluster.get(top_cluster_id, 0), valid_trials) if top_cluster_id else None
     entropy = _entropy(distribution) if valid_trials > 0 else None
     margin = _margin(distribution) if valid_trials > 0 else None
     disagreement_rate = 1.0 - top_p if top_p is not None else None
+    eff_num_clusters = _effective_num_clusters(distribution) if valid_trials > 0 else None
 
     aggregates_payload = {
         "question_id": question_id,
-        "discovered_mode_count": len(counts_by_mode),
-        "counts_by_mode_id": counts_by_mode,
-        "distribution_by_mode_id": distribution,
+        "discovered_cluster_count": len(counts_by_cluster),
+        "counts_by_cluster_id": counts_by_cluster,
+        "distribution_by_cluster_id": distribution,
         "valid_trials": valid_trials,
         "total_trials": total_trials,
         "parse_error_rate": _safe_divide(parse_error_count, total_trials),
-        "top_mode_id": top_mode_id,
+        "top_cluster_id": top_cluster_id,
         "top_p": top_p,
         "top_ci_low": top_ci[0] if top_ci else None,
         "top_ci_high": top_ci[1] if top_ci else None,
         "top_ci_half_width": top_ci[2] if top_ci else None,
         "entropy": entropy,
+        "effective_num_clusters": eff_num_clusters,
         "margin": margin,
         "disagreement_rate": disagreement_rate,
     }
@@ -401,8 +498,12 @@ async def execute_trials(
         "stop_reason": stop_reason,
         "stop_at_trials": total_trials,
         "valid_trials_total": valid_trials,
+        "parse_valid_total": parse_valid_count,
         "parse_error_count": parse_error_count,
         "llm_error_count": llm_error_count,
+        "embedding_error_count": embedding_error_count,
+        "embedding_call_count": embedding_call_count,
+        "summarizer_call_count": summarizer_call_count,
         "sampling_seed": rng_seed,
         "converged": stop_reason == "converged",
         "batches_completed": batches_completed,
@@ -423,7 +524,7 @@ async def execute_trials(
         parse_error_count=parse_error_count,
         batches_completed=batches_completed,
         converged=stop_reason == "converged",
-        top_mode_id=top_mode_id,
+        top_cluster_id=top_cluster_id,
         top_p=top_p,
         top_ci_low=top_ci[0] if top_ci else None,
         top_ci_high=top_ci[1] if top_ci else None,
@@ -431,6 +532,9 @@ async def execute_trials(
         entropy=entropy,
         margin=margin,
         disagreement_rate=disagreement_rate,
+        llm_call_count=llm_call_count,
+        embedding_call_count=embedding_call_count,
+        summarizer_call_count=summarizer_call_count,
     )
     _emit(
         {
@@ -451,6 +555,7 @@ async def _execute_one_trial(
     run_id: str,
     question_id: str | None = None,
     question_hash: str,
+    embed_text_policy: str,
     llm_config: LLMConfig,
     client: Any,
 ) -> TrialOutcome:
@@ -496,7 +601,6 @@ async def _execute_one_trial(
     retry_messages = None
     error_text = None
     embedded_text = None
-    mode_id = None
 
     try:
         response = await client.generate(request)
@@ -509,8 +613,7 @@ async def _execute_one_trial(
         latency_ms = response.latency_ms
         parse_valid, outcome_text, rationale, trace_summary, parse_error = _parse_output(response_text)
         if parse_valid and outcome_text is not None:
-            embedded_text = _embedded_text(outcome_text, rationale)
-            mode_id = _mode_id(embedded_text)
+            embedded_text = _embedded_text(outcome_text, rationale, embed_text_policy)
         else:
             retry_messages = build_retry_messages(item.messages, response_text)
     except Exception as exc:
@@ -562,7 +665,7 @@ async def _execute_one_trial(
         "rationale": rationale,
         "trace_summary": trace_summary,
         "embedded_text": embedded_text,
-        "mode_id": mode_id,
+        "cluster_id": None,
         "parse_valid": parse_valid,
         "retries_used": item.retries_used,
     }
@@ -575,8 +678,10 @@ async def _execute_one_trial(
         trial_record=trial_record,
         parsed_record=parsed_record,
         parse_valid=parse_valid,
-        mode_id=mode_id,
         embedded_text=embedded_text,
+        outcome_text=outcome_text,
+        rationale=rationale,
+        trace_summary=trace_summary,
         retry_messages=retry_messages,
         retries_used=item.retries_used,
         atom=item.atom,
@@ -634,38 +739,78 @@ def _parse_output(
     return True, outcome.strip(), rationale, trace_summary, None
 
 
-def _embedded_text(outcome: str, rationale: str | None) -> str:
-    parts = [_normalize_text(outcome)]
+def _embedded_text(outcome: str, rationale: str | None, policy: str) -> str:
+    if policy == "outcome":
+        return outcome.strip()
     if rationale:
-        parts.append(_normalize_text(rationale))
-    return "\n".join(parts)
+        return f"{outcome.strip()}\n{rationale.strip()}"
+    return outcome.strip()
 
 
-def _mode_id(embedded_text: str) -> str:
-    digest = hashlib.sha256(embedded_text.encode("utf-8")).hexdigest()
-    return f"mode_{digest[:12]}"
+def _embedding_record(
+    *,
+    trial_id: str,
+    text: str,
+    embedding: list[float],
+    dims: int,
+    model: str,
+    raw: dict[str, Any],
+) -> dict[str, Any]:
+    embed_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    vector_b64 = _encode_embedding(embedding)
+    return {
+        "trial_id": trial_id,
+        "embed_text_hash": embed_hash,
+        "dims": dims,
+        "dtype": "float32",
+        "encoding": "base64",
+        "vector_b64": vector_b64,
+        "model": model,
+        "raw": raw,
+    }
 
 
-def _normalize_text(text: str) -> str:
-    collapsed = " ".join(text.strip().split())
-    return collapsed.lower()
+def _encode_embedding(embedding: list[float]) -> str:
+    arr = array("f", embedding)
+    return base64.b64encode(arr.tobytes()).decode("ascii")
 
 
-def _new_mode_rate(
-    batch_results: list[TrialOutcome],
-    seen_modes: set[str],
-    batch_size: int,
-) -> tuple[float, set[str]]:
-    if batch_size <= 0:
-        return 0.0, set(seen_modes)
-    updated = set(seen_modes)
-    new_mode_count = 0
-    for outcome in batch_results:
-        if outcome.parse_valid and outcome.mode_id:
-            if outcome.mode_id not in updated:
-                new_mode_count += 1
-                updated.add(outcome.mode_id)
-    return new_mode_count / batch_size, updated
+def _clusters_online_payload(
+    *,
+    clusterer: OnlineLeaderClustering,
+    method: str,
+    tau: float,
+    embedding_model: str,
+    embed_text: str,
+) -> dict[str, Any]:
+    clusters = clusterer.export()
+    clusters_payload = []
+    for cluster in clusters:
+        centroid_b64 = _encode_embedding(cluster.centroid)
+        clusters_payload.append(
+            {
+                "cluster_id": cluster.cluster_id,
+                "count": cluster.count,
+                "centroid": {
+                    "dtype": "float32",
+                    "encoding": "base64",
+                    "data_b64": centroid_b64,
+                },
+                "exemplars": cluster.exemplars,
+            }
+        )
+    dims = len(clusters[0].centroid) if clusters else None
+    status = "complete" if clusters_payload else "empty"
+    return {
+        "status": status,
+        "method": method,
+        "tau": tau,
+        "embedding_model": embedding_model,
+        "embedding_dims": dims,
+        "normalization": "l2",
+        "embed_text": embed_text,
+        "clusters": clusters_payload,
+    }
 
 
 def _converged_candidate(
@@ -681,7 +826,7 @@ def _converged_candidate(
     js_divergence = entry.get("js_divergence")
     if js_divergence is None or js_divergence > delta_js_threshold:
         return False
-    if entry.get("new_mode_rate") is None or entry["new_mode_rate"] > epsilon_new_threshold:
+    if entry.get("new_cluster_rate") is None or entry["new_cluster_rate"] > epsilon_new_threshold:
         return False
     if epsilon_ci_half_width is None:
         return True
@@ -696,27 +841,27 @@ def _convergence_entry(
     batch_index: int,
     total_trials: int,
     valid_trials: int,
-    counts_by_mode: dict[str, int],
-    distribution_by_mode: dict[str, float],
-    top_mode_id: str | None,
+    counts_by_cluster: dict[str, int],
+    distribution_by_cluster: dict[str, float],
+    top_cluster_id: str | None,
     top_p: float | None,
     top_ci: tuple[float, float, float] | None,
     js_divergence: float | None,
-    new_mode_rate: float,
+    new_cluster_rate: float,
 ) -> dict[str, Any]:
     return {
         "batch_index": batch_index,
         "trials_completed_total": total_trials,
         "valid_trials_total": valid_trials,
-        "counts_by_mode_id": dict(counts_by_mode),
-        "distribution_by_mode_id": distribution_by_mode,
-        "top_mode_id": top_mode_id,
+        "counts_by_cluster_id": dict(counts_by_cluster),
+        "distribution_by_cluster_id": distribution_by_cluster,
+        "top_cluster_id": top_cluster_id,
         "top_p": top_p,
         "top_ci_low": top_ci[0] if top_ci else None,
         "top_ci_high": top_ci[1] if top_ci else None,
         "top_ci_half_width": top_ci[2] if top_ci else None,
         "js_divergence": js_divergence,
-        "new_mode_rate": new_mode_rate,
+        "new_cluster_rate": new_cluster_rate,
     }
 
 
@@ -726,7 +871,7 @@ def _distribution(counts: dict[str, int], total: int) -> dict[str, float]:
     return {label: count / total for label, count in counts.items()}
 
 
-def _top_mode_id(counts: dict[str, int]) -> str | None:
+def _top_cluster_id(counts: dict[str, int]) -> str | None:
     if not counts:
         return None
     return max(counts, key=counts.get)
@@ -762,6 +907,15 @@ def _margin(distribution: dict[str, float]) -> float:
     if len(sorted_values) == 1:
         return sorted_values[0]
     return sorted_values[0] - sorted_values[1]
+
+
+def _effective_num_clusters(distribution: dict[str, float]) -> float:
+    if not distribution:
+        return 0.0
+    denom = sum(value * value for value in distribution.values())
+    if denom <= 0:
+        return 0.0
+    return 1.0 / denom
 
 
 def _safe_divide(numerator: int, denominator: int) -> float:
@@ -832,76 +986,6 @@ def _temperature_policy_payload(policy: Any) -> dict[str, Any]:
     return {"type": "fixed", "value": value}
 
 
-def _worker_description(worker_id: int, completed: int, atom: QAtom | None) -> str:
-    status = "RUNNING" if atom else "IDLE"
-    worker_label = f"W{worker_id + 1:02d}"
-    done = f"{completed:>4}"
-    model = _clip(atom.model if atom else "—", 22)
-    atom_id = _clip(atom.atom_id if atom else "—", 12)
-    persona = _clip(atom.persona_id if atom and atom.persona_id else "none", 10)
-    return (
-        f"{worker_label}  {status:<7}  done:{done}  "
-        f"model:{model:<22}  atom:{atom_id:<12}  persona:{persona:<10}"
-    )
-
-
-def _execution_header_summary(
-    *,
-    resolved_config: ResolvedConfig,
-    question_text: str,
-    call_cap: int,
-    worker_count: int,
-    batch_size: int,
-) -> None:
-    semantic = resolved_config.semantic
-    protocol = semantic.protocol.type
-    models = ", ".join(semantic.models) if semantic.models else "n/a"
-    personas = ", ".join(semantic.personas.persona_ids) if semantic.personas.persona_ids else "none"
-    temperature = _format_temperature_policy(semantic.temperature_policy)
-    convergence = semantic.execution.convergence
-    epsilon_ci = (
-        f"{convergence.epsilon_ci_half_width:.3f}"
-        if convergence.epsilon_ci_half_width is not None
-        else "off"
-    )
-    mode_label = _mode_label(semantic.llm.mode)
-    summary = {
-        "Run ID": resolved_config.run.run_id,
-        "Started": resolved_config.run.started_at,
-        "Question": _truncate_text(question_text, 80),
-        "Mode": mode_label,
-        "Protocol": protocol,
-        "Models": models,
-        "Personas": personas,
-        "Temperature": temperature,
-        "K_max": str(call_cap),
-        "Workers / batch": f"{worker_count} / {batch_size}",
-        "delta_js": f"{convergence.delta_js_threshold:.3f}",
-        "epsilon_new": f"{convergence.epsilon_new_threshold:.3f}",
-        "epsilon_ci": epsilon_ci,
-    }
-    return summary
-
-
-def _format_temperature_policy(policy: Any) -> str:
-    kind = getattr(policy, "kind", "fixed")
-    values = list(getattr(policy, "temperatures", []) or [])
-    if kind == "range" and len(values) >= 2:
-        low, high = values[0], values[1]
-        return f"range {low:.2f}–{high:.2f}"
-    if kind == "list" and values:
-        return "list [" + ", ".join(f"{value:.2f}" for value in values) + "]"
-    if values:
-        return f"fixed {values[0]:.2f}"
-    return "fixed"
-
-
-def _mode_label(mode: str) -> str:
-    if mode == "mock":
-        return "mock (no network calls)"
-    return "remote (OpenRouter)"
-
-
 def _truncate_text(text: str, limit: int) -> str:
     cleaned = " ".join(text.strip().split())
     if len(cleaned) <= limit:
@@ -910,25 +994,17 @@ def _truncate_text(text: str, limit: int) -> str:
 
 
 def _checkpoint_row(entry: dict[str, Any], stop_reason: str | None) -> dict[str, str]:
-    modes = len(entry.get("counts_by_mode_id", {}) or {})
+    clusters_count = len(entry.get("counts_by_cluster_id", {}) or {})
     js_divergence = entry.get("js_divergence")
-    new_mode_rate = entry.get("new_mode_rate")
+    new_cluster_rate = entry.get("new_cluster_rate")
     ci_half = entry.get("top_ci_half_width")
     stop = "yes" if stop_reason is not None else "no"
     return {
         "Batch": str(entry.get("batch_index")),
         "Trials": str(entry.get("trials_completed_total")),
-        "Modes": str(modes),
+        "Clusters": str(clusters_count),
         "JS": f"{js_divergence:.3f}" if js_divergence is not None else "n/a",
-        "New": f"{new_mode_rate:.3f}" if new_mode_rate is not None else "n/a",
+        "New": f"{new_cluster_rate:.3f}" if new_cluster_rate is not None else "n/a",
         "CI HW": f"{ci_half:.3f}" if ci_half is not None else "n/a",
         "Stop": stop,
     }
-
-
-def _clip(text: str, width: int) -> str:
-    if len(text) <= width:
-        return text
-    if width <= 1:
-        return text[:width]
-    return text[: width - 1] + "…"

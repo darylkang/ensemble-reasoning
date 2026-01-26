@@ -25,10 +25,16 @@ class Manifest:
     platform: dict
     config_hash: str
     semantic_config_hash: str
+    embedding_model: str
+    summarizer_model: str
+    summarizer_prompt_version: str
     planned_call_budget: int
     planned_call_budget_scope: str
     planned_total_trials: int
     planned_total_trials_scope: str
+    llm_call_count: int
+    embedding_call_count: int
+    summarizer_call_count: int
 
     def to_dict(self) -> dict:
         return {
@@ -41,10 +47,16 @@ class Manifest:
             "platform": self.platform,
             "config_hash": self.config_hash,
             "semantic_config_hash": self.semantic_config_hash,
+            "embedding_model": self.embedding_model,
+            "summarizer_model": self.summarizer_model,
+            "summarizer_prompt_version": self.summarizer_prompt_version,
             "planned_call_budget": self.planned_call_budget,
             "planned_call_budget_scope": self.planned_call_budget_scope,
             "planned_total_trials": self.planned_total_trials,
             "planned_total_trials_scope": self.planned_total_trials_scope,
+            "llm_call_count": self.llm_call_count,
+            "embedding_call_count": self.embedding_call_count,
+            "summarizer_call_count": self.summarizer_call_count,
         }
 
 

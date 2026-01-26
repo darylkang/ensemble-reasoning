@@ -19,7 +19,11 @@ from arbiter.config import (
     LLMRequestDefaults,
     ProtocolConfig,
     ResolvedConfig,
+    SummarizerConfig,
     TrialBudget,
+    SUMMARIZER_PROMPT_VERSION,
+    default_embedding_model,
+    default_summarizer_model,
     materialize_q_distribution,
     slugify_run_name,
 )
@@ -68,6 +72,7 @@ def prepare_run(
 
     protocol_config = _build_protocol_config(input_config)
     clustering_config = _build_clustering_config(input_config)
+    summarizer_config = _build_summarizer_config(input_config)
     execution_config = _build_execution_config(input_config)
 
     k_max = int(input_config.get("execution", {}).get("k_max", 1000))
@@ -91,7 +96,7 @@ def prepare_run(
     run_dir = create_run_dir(Path(output_base_dir_str), timestamp, run_slug)
 
     resolved_config = ResolvedConfig.build_from_wizard_inputs(
-        schema_version="0.7",
+        schema_version="0.8",
         run_name=run_name or "auto",
         run_slug=run_slug,
         run_id=run_id,
@@ -103,6 +108,7 @@ def prepare_run(
         llm=llm_config,
         protocol=protocol_config,
         clustering=clustering_config,
+        summarizer=summarizer_config,
         execution=execution_config,
         temperature_policy=temperature_policy,
         personas=persona_policy,
@@ -140,8 +146,12 @@ def prepare_run(
     )
 
 
-def write_manifest(*, setup: RunSetup, ended_at: datetime) -> None:
+def write_manifest(*, setup: RunSetup, ended_at: datetime, execution_result: Any | None = None) -> None:
     git_info = get_git_info(Path.cwd())
+    llm_call_count = int(getattr(execution_result, "llm_call_count", 0) or 0)
+    embedding_call_count = int(getattr(execution_result, "embedding_call_count", 0) or 0)
+    summarizer_call_count = int(getattr(execution_result, "summarizer_call_count", 0) or 0)
+    semantic = setup.resolved_config.semantic
     manifest = Manifest(
         run_id=setup.run_id,
         started_at=setup.started_at.isoformat(),
@@ -152,15 +162,21 @@ def write_manifest(*, setup: RunSetup, ended_at: datetime) -> None:
         platform=platform_info(),
         config_hash=setup.config_hash,
         semantic_config_hash=setup.semantic_config_hash,
+        embedding_model=semantic.clustering.embedding_model,
+        summarizer_model=semantic.summarizer.model,
+        summarizer_prompt_version=semantic.summarizer.prompt_version,
         planned_call_budget=setup.planned_call_budget,
         planned_call_budget_scope="per_question",
         planned_total_trials=setup.planned_total_trials,
         planned_total_trials_scope="per_question",
+        llm_call_count=llm_call_count,
+        embedding_call_count=embedding_call_count,
+        summarizer_call_count=summarizer_call_count,
     )
     write_json(setup.run_dir / "manifest.json", manifest.to_dict())
 
 
-def collect_top_modes(run_dir: Path, top_n: int = 3) -> list[tuple[str, float, str]]:
+def collect_top_clusters(run_dir: Path, top_n: int = 3) -> list[tuple[str, float, str]]:
     aggregates_path = run_dir / "aggregates.json"
     parsed_path = run_dir / "parsed.jsonl"
     if not aggregates_path.exists() or not parsed_path.exists():
@@ -169,32 +185,32 @@ def collect_top_modes(run_dir: Path, top_n: int = 3) -> list[tuple[str, float, s
         aggregates = json.loads(aggregates_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
-    distribution = aggregates.get("distribution_by_mode_id") or {}
+    distribution = aggregates.get("distribution_by_cluster_id") or {}
     if not isinstance(distribution, dict) or not distribution:
         return []
 
-    sorted_modes = sorted(distribution.items(), key=lambda item: item[1], reverse=True)[:top_n]
-    mode_ids = [mode_id for mode_id, _ in sorted_modes]
+    sorted_clusters = sorted(distribution.items(), key=lambda item: item[1], reverse=True)[:top_n]
+    cluster_ids = [cluster_id for cluster_id, _ in sorted_clusters]
     exemplars: dict[str, str] = {}
     try:
         for line in parsed_path.read_text(encoding="utf-8").splitlines():
-            if len(exemplars) == len(mode_ids):
+            if len(exemplars) == len(cluster_ids):
                 break
             try:
                 payload = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            mode_id = payload.get("mode_id")
+            cluster_id = payload.get("cluster_id")
             outcome = payload.get("outcome")
-            if mode_id in mode_ids and mode_id not in exemplars and isinstance(outcome, str):
-                exemplars[mode_id] = _truncate_text(outcome, 60)
+            if cluster_id in cluster_ids and cluster_id not in exemplars and isinstance(outcome, str):
+                exemplars[cluster_id] = _truncate_text(outcome, 60)
     except OSError:
         return []
 
     result: list[tuple[str, float, str]] = []
-    for mode_id, share in sorted_modes:
-        exemplar = exemplars.get(mode_id, "n/a")
-        result.append((mode_id, float(share), exemplar))
+    for cluster_id, share in sorted_clusters:
+        exemplar = exemplars.get(cluster_id, "n/a")
+        result.append((cluster_id, float(share), exemplar))
     return result
 
 
@@ -217,9 +233,9 @@ def collect_last_checkpoints(run_dir: Path, limit: int = 3) -> list[dict[str, st
             {
                 "Batch": str(entry.get("batch_index")),
                 "Trials": str(entry.get("trials_completed_total")),
-                "Modes": str(len(entry.get("counts_by_mode_id") or {})),
+                "Clusters": str(len(entry.get("counts_by_cluster_id") or {})),
                 "JS": f"{entry.get('js_divergence'):.3f}" if entry.get("js_divergence") is not None else "n/a",
-                "New": f"{entry.get('new_mode_rate'):.3f}" if entry.get("new_mode_rate") is not None else "n/a",
+                "New": f"{entry.get('new_cluster_rate'):.3f}" if entry.get("new_cluster_rate") is not None else "n/a",
                 "CI HW": f"{entry.get('top_ci_half_width'):.3f}" if entry.get("top_ci_half_width") is not None else "n/a",
             }
         )
@@ -271,10 +287,24 @@ def _build_protocol_config(input_config: dict[str, object]) -> ProtocolConfig:
 
 def _build_clustering_config(input_config: dict[str, object]) -> ClusteringConfig:
     clustering = input_config.get("clustering", {}) or {}
-    method = str(clustering.get("method", "hash_baseline"))
+    method = str(clustering.get("method", "leader"))
     tau = float(clustering.get("tau", 0.85))
-    embed_text = str(clustering.get("embed_text", "outcome+rationale"))
-    return ClusteringConfig(method=method, tau=tau, embed_text=embed_text)
+    embed_text = str(clustering.get("embed_text", "outcome"))
+    embedding_model = str(clustering.get("embedding_model") or default_embedding_model())
+    return ClusteringConfig(
+        method=method,
+        tau=tau,
+        embed_text=embed_text,
+        embedding_model=embedding_model,
+    )
+
+
+def _build_summarizer_config(input_config: dict[str, object]) -> SummarizerConfig:
+    summarizer = input_config.get("summarizer", {}) or {}
+    enabled = bool(summarizer.get("enabled", False))
+    model = str(summarizer.get("model") or default_summarizer_model())
+    prompt_version = str(summarizer.get("prompt_version") or SUMMARIZER_PROMPT_VERSION)
+    return SummarizerConfig(enabled=enabled, model=model, prompt_version=prompt_version)
 
 
 def _build_execution_config(input_config: dict[str, object]) -> ExecutionConfig:

@@ -138,7 +138,7 @@ def validate_config(
         errors.append(ValidationIssue("clustering", "Missing clustering block."))
     else:
         method = clustering.get("method")
-        if method not in {"hash_baseline", "leader"}:
+        if method not in {"leader"}:
             errors.append(ValidationIssue("clustering.method", "Unsupported clustering method."))
         tau = clustering.get("tau")
         if tau is None:
@@ -148,6 +148,23 @@ def validate_config(
         embed_text = clustering.get("embed_text")
         if embed_text not in {"outcome", "outcome+rationale"}:
             errors.append(ValidationIssue("clustering.embed_text", "Unsupported embed_text option."))
+        embedding_model = clustering.get("embedding_model")
+        if not isinstance(embedding_model, str) or not embedding_model.strip():
+            errors.append(ValidationIssue("clustering.embedding_model", "Embedding model slug is required."))
+
+    summarizer = data.get("summarizer")
+    if not isinstance(summarizer, dict):
+        errors.append(ValidationIssue("summarizer", "Missing summarizer block."))
+    else:
+        enabled = summarizer.get("enabled")
+        if not isinstance(enabled, bool):
+            errors.append(ValidationIssue("summarizer.enabled", "summarizer.enabled must be boolean."))
+        model = summarizer.get("model")
+        if not isinstance(model, str) or not model.strip():
+            errors.append(ValidationIssue("summarizer.model", "Summarizer model slug is required."))
+        prompt_version = summarizer.get("prompt_version")
+        if not isinstance(prompt_version, str) or not prompt_version.strip():
+            errors.append(ValidationIssue("summarizer.prompt_version", "Summarizer prompt_version is required."))
 
     llm = data.get("llm")
     if not isinstance(llm, dict):

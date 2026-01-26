@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 import asyncio
+import json
 
 from textual.app import ComposeResult
 from textual.containers import Container
@@ -398,9 +399,9 @@ class AdvancedScreen(BaseScreen):
             convergence["min_trials"] = _int_or_default(self.query_one("#adv-min", Input).value, 64)
             convergence["patience_batches"] = _int_or_default(self.query_one("#adv-patience", Input).value, 2)
 
-            clustering["method"] = self.query_one("#adv-cluster-method", Input).value or "hash_baseline"
+            clustering["method"] = self.query_one("#adv-cluster-method", Input).value or "leader"
             clustering["tau"] = _float_or_default(self.query_one("#adv-cluster-tau", Input).value, 0.85)
-            clustering["embed_text"] = self.query_one("#adv-embed-text", Input).value or "outcome+rationale"
+            clustering["embed_text"] = self.query_one("#adv-embed-text", Input).value or "outcome"
             self.app.show_review()
 
 
@@ -415,6 +416,12 @@ class ReviewScreen(BaseScreen):
             yield self.summary
             self.write_config = Checkbox("Write arbiter.config.json", value=True, id="review-write")
             yield self.write_config
+            self.summarize = Checkbox(
+                "Generate cluster summaries (remote only)",
+                value=False,
+                id="review-summarize",
+            )
+            yield self.summarize
             self.run_name = Input(placeholder="Run name", id="review-run-name")
             yield self.run_name
             self.output_dir = Input(placeholder="Output base directory", id="review-output")
@@ -426,6 +433,10 @@ class ReviewScreen(BaseScreen):
         self.output_dir.value = str(self.state.output_base_dir)
         self.run_name.value = self.state.run_name
         self.summary.update(_review_summary(self.state.input_config))
+        summarizer_enabled = bool((self.state.input_config.get("summarizer") or {}).get("enabled", False))
+        self.summarize.value = summarizer_enabled
+        if self.state.selected_mode != "remote":
+            self.summarize.disabled = True
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "review-run":
@@ -440,6 +451,7 @@ class ReviewScreen(BaseScreen):
             default_model=self.state.default_model,
             llm_mode=llm_mode,
         )
+        self.state.input_config.setdefault("summarizer", {})["enabled"] = bool(self.summarize.value)
         if self.write_config.value:
             write_json(self.state.config_path, self.state.input_config)
         self.app.show_execution()
@@ -482,7 +494,8 @@ class ExecutionScreen(BaseScreen):
             self.header.update(f"Failed to prepare run: {exc}")
             return
         self.app.run_setup = setup
-        self.header.update(_execution_header(setup))
+        self.base_header = _execution_header(setup)
+        self.header.update(self.base_header)
         on_event = lambda event: self.event_queue.put_nowait(event)
         result = await execute_trials(
             run_dir=setup.run_dir,
@@ -490,7 +503,7 @@ class ExecutionScreen(BaseScreen):
             question=setup.question_record,
             on_event=on_event,
         )
-        write_manifest(setup=setup, ended_at=datetime.now(timezone.utc))
+        write_manifest(setup=setup, ended_at=datetime.now(timezone.utc), execution_result=result)
         self.app.execution_result = result
         self.app.show_receipt(setup.run_dir, result)
 
@@ -538,6 +551,14 @@ class ExecutionScreen(BaseScreen):
         elif event_type == "batch_checkpoint":
             self.latest_checkpoint = event.get("row")
             self.checkpoint.update(_checkpoint_text(self.latest_checkpoint))
+            entry = event.get("entry") or {}
+            clusters = len(entry.get("counts_by_cluster_id") or {})
+            top_p = entry.get("top_p")
+            if hasattr(self, "base_header"):
+                summary = f"Clusters discovered: {clusters}"
+                if isinstance(top_p, (int, float)):
+                    summary += f" · Top share: {top_p:.3f}"
+                self.header.update(self.base_header + "\n" + summary)
 
     def _render_workers(self) -> None:
         lines = ["WID  STATUS   DONE  MODEL                  ATOM         PERSONA"]
@@ -551,10 +572,10 @@ class ExecutionScreen(BaseScreen):
 class ReceiptScreen(BaseScreen):
     BINDINGS = [("q", "quit", "Quit")]
 
-    def __init__(self, state, execution_result, top_modes, checkpoints, run_dir: Path) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, state, execution_result, top_clusters, checkpoints, run_dir: Path) -> None:  # type: ignore[no-untyped-def]
         super().__init__(state)
         self.execution_result = execution_result
-        self.top_modes = top_modes
+        self.top_clusters = top_clusters
         self.checkpoints = checkpoints
         self.run_dir = run_dir
 
@@ -563,7 +584,7 @@ class ReceiptScreen(BaseScreen):
         surface.border_title = "Receipt"
         with surface:
             yield Static(
-                _receipt_text(self.execution_result, self.top_modes, self.checkpoints, self.run_dir),
+                _receipt_text(self.execution_result, self.top_clusters, self.checkpoints, self.run_dir),
                 id="receipt",
             )
             yield Button("Exit", id="receipt-exit")
@@ -589,6 +610,7 @@ def _review_summary(input_config: dict[str, Any]) -> str:
     execution = input_config.get("execution", {})
     convergence = input_config.get("convergence", {})
     clustering = input_config.get("clustering", {})
+    summarizer = input_config.get("summarizer", {})
     lines = [
         f"Question: {(question.get('text') or '').strip()[:80]}",
         f"Models: {models or 'none'}",
@@ -598,7 +620,9 @@ def _review_summary(input_config: dict[str, Any]) -> str:
         f"delta_js: {convergence.get('delta_js_threshold', 0.02)}",
         f"epsilon_new: {convergence.get('epsilon_new_threshold', 0.01)}",
         f"epsilon_ci: {convergence.get('epsilon_ci_half_width', 0.05)}",
-        f"clustering: {clustering.get('method', 'hash_baseline')}",
+        f"clustering: {clustering.get('method', 'leader')} (embed_text={clustering.get('embed_text', 'outcome')})",
+        f"embedding model: {clustering.get('embedding_model', 'n/a')}",
+        f"summarizer: {'enabled' if summarizer.get('enabled') else 'disabled'}",
     ]
     return "\n".join(lines)
 
@@ -608,13 +632,16 @@ def _execution_header(setup) -> str:  # type: ignore[no-untyped-def]
     question = setup.question_record.get("question_text", "")
     models = ", ".join(semantic.models) if semantic.models else "n/a"
     personas = ", ".join(semantic.personas.persona_ids) if semantic.personas.persona_ids else "none"
+    mode_label = "remote (OpenRouter)" if semantic.llm.mode == "openrouter" else "mock (no network calls)"
     lines = [
         f"Run ID: {setup.run_id}",
         f"Started: {setup.started_at.isoformat()}",
         f"Question: {question.strip()[:80]}",
-        f"Mode: {semantic.llm.mode}",
+        f"Mode: {mode_label}",
         f"Models: {models}",
         f"Personas: {personas}",
+        f"Embedding model: {semantic.clustering.embedding_model}",
+        f"Cluster tau: {semantic.clustering.tau}",
         f"K_max: {semantic.trial_budget.k_max}",
         f"Workers / batch: {semantic.execution.worker_count} / {semantic.execution.batch_size}",
     ]
@@ -623,8 +650,8 @@ def _execution_header(setup) -> str:  # type: ignore[no-untyped-def]
 
 def _checkpoint_text(row: dict[str, str] | None) -> str:
     if not row:
-        return "Batch  Trials  Modes  JS     New    CI HW  Stop"
-    return " ".join([str(row.get(key, "")) for key in ["Batch", "Trials", "Modes", "JS", "New", "CI HW", "Stop"]])
+        return "Batch  Trials  Clusters  JS     New    CI HW  Stop"
+    return " ".join([str(row.get(key, "")) for key in ["Batch", "Trials", "Clusters", "JS", "New", "CI HW", "Stop"]])
 
 
 def _format_worker_line(worker_id: int, data: dict[str, Any]) -> str:
@@ -637,23 +664,40 @@ def _format_worker_line(worker_id: int, data: dict[str, Any]) -> str:
     return f"{wid}  {status}  {done}  {model}  {atom}  {persona}"
 
 
-def _receipt_text(result, top_modes, checkpoints, run_dir: Path) -> str:  # type: ignore[no-untyped-def]
+def _receipt_text(result, top_clusters, checkpoints, run_dir: Path) -> str:  # type: ignore[no-untyped-def]
+    aggregates = _load_json(run_dir / "aggregates.json")
+    cluster_count = aggregates.get("discovered_cluster_count")
+    entropy = aggregates.get("entropy")
+    eff_num = aggregates.get("effective_num_clusters")
     lines = [
         f"Stop reason: {result.stop_reason}",
         f"Trials executed: {result.stop_at_trials}",
         f"Valid trials: {result.valid_trials}",
         f"Batches: {result.batches_completed}",
     ]
-    if top_modes:
-        lines.append("Top modes:")
-        for mode_id, share, exemplar in top_modes:
-            lines.append(f"- {mode_id} · {share:.3f} · {exemplar}")
+    if cluster_count is not None:
+        lines.append(f"Clusters discovered: {cluster_count}")
+    if entropy is not None:
+        lines.append(f"Entropy: {entropy:.3f}")
+    if eff_num is not None:
+        lines.append(f"Effective clusters: {eff_num:.2f}")
+    if top_clusters:
+        lines.append("Top clusters:")
+        for cluster_id, share, exemplar in top_clusters:
+            lines.append(f"- {cluster_id} · {share:.3f} · {exemplar}")
     if checkpoints:
         lines.append("Last checkpoints:")
         for row in checkpoints:
             lines.append("  ".join(row.values()))
     lines.append(f"Artifacts: {run_dir}")
     return "\n".join(lines)
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
 def _int_or_default(value: str, default: int) -> int:

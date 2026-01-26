@@ -1,7 +1,7 @@
 # Arbiter
 Ensemble Reasoning Research Harness
 
-Arbiter (repo: ensemble-reasoning) is a research harness for mapping the reasoning landscape of language models. It treats model outputs as structured objects, embeds them, and clusters them to discover emergent modes rather than enforcing a predefined label set.
+Arbiter (repo: ensemble-reasoning) is a research harness for mapping the reasoning landscape of language models. It treats model outputs as structured objects, embeds them, and clusters them to discover emergent outcome modes rather than enforcing a predefined label set.
 
 The key framing is explicit configuration sampling `Q(c)` and the induced distribution over discovered modes `P_Q(y|x)`, estimated by `P̂^Q(y|x)`. We prioritize reliability signals, decision stability, and meta-uncertainty (confidence intervals, convergence) rather than accuracy alone.
 
@@ -11,8 +11,8 @@ The key framing is explicit configuration sampling `Q(c)` and the induced distri
 - Not a simulation of human populations or juries.
 
 ## Current status
-- `arbiter` executes single-question runs with OpenRouter (or mock when no key is present).
-- The artifact bundle and clustering outputs are evolving toward the full contract in `docs/spec.md`.
+- `arbiter` executes single-question runs with OpenRouter (or mock when no key is present), including embeddings and online clustering for convergence.
+- Offline clustering and summarization artifacts are scaffolded and may be `not_run` in some runs.
 - `runs/` is generated output and should remain untracked/ignored.
 
 ## Requirements
@@ -21,7 +21,8 @@ The key framing is explicit configuration sampling `Q(c)` and the induced distri
 - Measurement mode defaults to no fallbacks (`allow_fallbacks=false`) unless explicitly overridden.
 
 ## Configuration
-Copy `.env.example` to `.env`, fill in values, and keep `.env` untracked. Arbiter reads these environment variables at runtime.
+Copy `.env.example` to `.env`, fill in values, and keep `.env` untracked. Arbiter reads these environment variables at runtime. Embedding and summarizer instruments are locked by default and can be overridden via `ARBITER_EMBEDDING_MODEL` and `ARBITER_SUMMARIZER_MODEL`.
+
 Copy `arbiter.config.example.json` to `arbiter.config.json` to start from a canonical template; the wizard will load it and only prompt for missing fields.
 
 Validate a config file before running:
@@ -55,7 +56,7 @@ python -m pip install "git+https://github.com/darylkang/ensemble-reasoning.git@m
 5) If Customize: decode params, persona mix, model mix, protocol, advanced settings
 6) Review -> Execute -> Receipt
 
-Runs write a folder under `./runs` following the artifact contract in `docs/spec.md`, including `manifest.json`, `config.input.json`, `config.resolved.json`, `question.json`, `trials.jsonl`, `parsed.jsonl`, `aggregates.json`, `metrics.json`, and clustering outputs.
+Runs write a folder under `./runs` following the artifact contract in `docs/spec.md`, including `manifest.json`, `config.input.json`, `config.resolved.json`, `question.json`, `trials.jsonl`, `parsed.jsonl`, `embeddings.jsonl`, `clusters_online.json`, `clusters_offline.json`, `cluster_summaries.json`, `aggregates.json`, and `metrics.json`.
 
 ```bash
 arbiter --help

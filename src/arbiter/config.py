@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 from typing import Any, Iterable
+import os
 
 
 @dataclass(frozen=True)
@@ -110,12 +111,14 @@ class ClusteringConfig:
     method: str
     tau: float
     embed_text: str
+    embedding_model: str
 
     def to_dict(self) -> dict:
         return {
             "method": self.method,
             "tau": self.tau,
             "embed_text": self.embed_text,
+            "embedding_model": self.embedding_model,
         }
 
 
@@ -150,6 +153,19 @@ class ExecutionConfig:
             "batch_size": self.batch_size,
             "max_retries": self.max_retries,
             "convergence": self.convergence.to_dict(),
+        }
+
+@dataclass(frozen=True)
+class SummarizerConfig:
+    enabled: bool
+    model: str
+    prompt_version: str
+
+    def to_dict(self) -> dict:
+        return {
+            "enabled": self.enabled,
+            "model": self.model,
+            "prompt_version": self.prompt_version,
         }
 
 
@@ -248,6 +264,7 @@ class ResolvedConfig:
         llm: "LLMConfig",
         protocol: "ProtocolConfig",
         clustering: "ClusteringConfig",
+        summarizer: "SummarizerConfig",
         execution: "ExecutionConfig",
         temperature_policy: TemperaturePolicy,
         personas: PersonaPolicy,
@@ -270,6 +287,7 @@ class ResolvedConfig:
             llm=llm,
             protocol=protocol,
             clustering=clustering,
+            summarizer=summarizer,
             execution=execution,
             temperature_policy=temperature_policy,
             personas=personas,
@@ -287,6 +305,7 @@ class SemanticConfig:
     llm: LLMConfig
     protocol: ProtocolConfig
     clustering: ClusteringConfig
+    summarizer: SummarizerConfig
     execution: ExecutionConfig
     temperature_policy: TemperaturePolicy
     personas: PersonaPolicy
@@ -301,6 +320,7 @@ class SemanticConfig:
             "llm": self.llm.to_dict(),
             "protocol": self.protocol.to_dict(),
             "clustering": self.clustering.to_dict(),
+            "summarizer": self.summarizer.to_dict(),
             "execution": self.execution.to_dict(),
             "temperature_policy": self.temperature_policy.to_dict(),
             "personas": self.personas.to_dict(),
@@ -316,10 +336,27 @@ class PersonaLoadResult:
     error: str | None
 
 
-CANONICAL_SCHEMA_VERSION = "1.0"
+CANONICAL_SCHEMA_VERSION = "1.1"
+SUMMARIZER_PROMPT_VERSION = "v1"
 
 
-def default_canonical_config(*, default_model: str, llm_mode: str) -> dict[str, Any]:
+def default_embedding_model() -> str:
+    return os.getenv("ARBITER_EMBEDDING_MODEL", "openai/text-embedding-3-large")
+
+
+def default_summarizer_model() -> str:
+    return os.getenv("ARBITER_SUMMARIZER_MODEL", "openai/gpt-5")
+
+
+def default_canonical_config(
+    *,
+    default_model: str,
+    llm_mode: str,
+    embedding_model: str | None = None,
+    summarizer_model: str | None = None,
+) -> dict[str, Any]:
+    embedding_model = embedding_model or default_embedding_model()
+    summarizer_model = summarizer_model or default_summarizer_model()
     return {
         "schema_version": CANONICAL_SCHEMA_VERSION,
         "question": {
@@ -355,9 +392,15 @@ def default_canonical_config(*, default_model: str, llm_mode: str) -> dict[str, 
             "patience_batches": 2,
         },
         "clustering": {
-            "method": "hash_baseline",
+            "method": "leader",
             "tau": 0.85,
-            "embed_text": "outcome+rationale",
+            "embed_text": "outcome",
+            "embedding_model": embedding_model,
+        },
+        "summarizer": {
+            "enabled": False,
+            "model": summarizer_model,
+            "prompt_version": SUMMARIZER_PROMPT_VERSION,
         },
         "llm": {
             "mode": llm_mode,
@@ -369,8 +412,20 @@ def default_canonical_config(*, default_model: str, llm_mode: str) -> dict[str, 
     }
 
 
-def normalize_canonical_config(data: dict[str, Any], *, default_model: str, llm_mode: str) -> dict[str, Any]:
-    base = default_canonical_config(default_model=default_model, llm_mode=llm_mode)
+def normalize_canonical_config(
+    data: dict[str, Any],
+    *,
+    default_model: str,
+    llm_mode: str,
+    embedding_model: str | None = None,
+    summarizer_model: str | None = None,
+) -> dict[str, Any]:
+    base = default_canonical_config(
+        default_model=default_model,
+        llm_mode=llm_mode,
+        embedding_model=embedding_model,
+        summarizer_model=summarizer_model,
+    )
     merged = _merge_dicts(base, data)
     question = merged.setdefault("question", {})
     question.setdefault("id", None)
@@ -396,6 +451,7 @@ def normalize_canonical_config(data: dict[str, Any], *, default_model: str, llm_
     merged.setdefault("execution", base["execution"])
     merged.setdefault("convergence", base["convergence"])
     merged.setdefault("clustering", base["clustering"])
+    merged.setdefault("summarizer", base["summarizer"])
     merged.setdefault("llm", base["llm"])
 
     merged["q"]["models"]["items"] = _normalize_weighted_items(models["items"], key="slug")
