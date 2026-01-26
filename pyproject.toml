@@ -16,6 +16,12 @@ dependencies = [
   "textual>=0.70.0",
 ]
 
+[project.optional-dependencies]
+test = [
+  "pytest>=8.2.0",
+  "pytest-asyncio>=0.23.0",
+]
+
 [project.scripts]
 arbiter = "arbiter.cli:main"
 
@@ -25,3 +31,6 @@ include = ["src/arbiter/catalog/*.json", "src/arbiter/ui/*.tcss"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/arbiter/catalog/*.json", "src/arbiter/ui/*.tcss"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
