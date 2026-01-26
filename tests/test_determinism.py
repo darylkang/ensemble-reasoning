@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from .conftest import _run_mock
+from tests.utils import run_mock
 
 
 def _load_jsonl(path: Path) -> list[dict]:
@@ -14,8 +14,8 @@ def _load_jsonl(path: Path) -> list[dict]:
 
 @pytest.mark.asyncio
 async def test_deterministic_clusters(tmp_path: Path) -> None:
-    setup_a, _ = await _run_mock(tmp_path / "a", seed=42, run_name="det-a")
-    setup_b, _ = await _run_mock(tmp_path / "b", seed=42, run_name="det-b")
+    setup_a, _ = await run_mock(tmp_path / "a", seed=42, run_name="det-a")
+    setup_b, _ = await run_mock(tmp_path / "b", seed=42, run_name="det-b")
 
     parsed_a = {
         record["trial_id"]: record.get("cluster_id")

@@ -12,6 +12,7 @@ from textual.app import ComposeResult
 from textual.containers import Container
 from textual.screen import Screen
 from textual.widgets import Button, Checkbox, Input, Label, OptionList, ProgressBar, Static, TextArea
+from textual.widgets.option_list import Option
 
 from arbiter.catalog import load_model_catalog, load_persona_catalog
 from arbiter.config import default_canonical_config, normalize_canonical_config
@@ -46,23 +47,24 @@ class WelcomeScreen(BaseScreen):
             yield Static(status, id="welcome-status")
             self.note = Static("", id="welcome-note")
             yield self.note
-            self.mode_list = OptionList(
-                "Mock (no network calls)",
-                "Remote (OpenRouter)",
-                id="mode-list",
-            )
+            self.mode_list = OptionList(id="mode-list")
             yield self.mode_list
             yield Static("Press Enter to begin", id="welcome-hint")
         yield _footer_hint()
 
     def on_mount(self) -> None:
+        self.mode_list.clear_options()
         if not self.state.api_key_present:
-            self.mode_list.clear_options()
-            self.mode_list.add_option("Mock (no network calls)")
-            self.mode_list.add_option("Remote (requires OPENROUTER_API_KEY)")
+            self.state.selected_mode = "mock"
+            self.mode_list.add_option(Option("Mock (no network calls)"))
+            self.mode_list.add_option(Option("Remote (requires OPENROUTER_API_KEY)", disabled=True))
             self.note.update("To enable Remote, set OPENROUTER_API_KEY in .env (or your environment).")
-        index = 1 if self.state.selected_mode == "remote" else 0
-        self.mode_list.highlighted = index
+            self.mode_list.highlighted = 0
+        else:
+            self.state.selected_mode = "remote"
+            self.mode_list.add_option(Option("Mock (no network calls)"))
+            self.mode_list.add_option(Option("Remote (OpenRouter)"))
+            self.mode_list.highlighted = 1
 
     def action_continue(self) -> None:
         if self.mode_list.highlighted == 1 and not self.state.api_key_present:
@@ -880,7 +882,7 @@ def _optional_int(value: str) -> int | None:
 
 def _format_threshold(value: float | None, threshold: float | None, *, allow_disabled: bool = False) -> str:
     if threshold is None:
-        return "off" if allow_disabled else "n/a"
+        return "—" if allow_disabled else "n/a"
     if value is None:
         return "n/a"
     op = "<" if value <= threshold else ">"

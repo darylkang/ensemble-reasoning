@@ -23,6 +23,10 @@ Screen {
   margin-top: 1;
 }
 
+OptionList > .option--disabled {
+  color: #928374;
+}
+
 #question-input {
   height: 8;
 }
